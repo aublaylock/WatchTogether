@@ -25,6 +25,8 @@
   <small>Copy this and send it to the sharer.</small>
 
   <div id="status"></div>
+  <h3>Log</h3>
+  <pre id="log" style="background:#111;color:#ccc;padding:0.5rem;height:150px;overflow-y:auto;font-size:0.8rem;"></pre>
 
   <script>
     const STUN = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -33,6 +35,12 @@
       const el = document.getElementById('status');
       el.textContent = msg;
       el.className = cls || '';
+    }
+
+    function log(msg) {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
     }
 
     document.getElementById('btn-connect').addEventListener('click', async () => {
@@ -55,20 +63,34 @@
         dc.onerror = ev => setStatus('DataChannel error: ' + ev, 'err');
       };
 
+      pc.onicecandidate = e => {
+        if (e.candidate) log('candidate: ' + e.candidate.type + ' ' + e.candidate.address + ':' + e.candidate.port);
+        else             log('ICE gathering done');
+      };
+
       pc.oniceconnectionstatechange = () => {
+        log('iceConnectionState → ' + pc.iceConnectionState);
         if (['failed','disconnected','closed'].includes(pc.iceConnectionState))
           setStatus('ICE: ' + pc.iceConnectionState, 'err');
       };
 
+      pc.onicegatheringstatechange = () => log('gatheringState → ' + pc.iceGatheringState);
+
       await pc.setRemoteDescription(offer);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      log('Local description set, gathering…');
 
       // Wait for ICE gathering to finish
       await new Promise(res => {
         if (pc.iceGatheringState === 'complete') return res();
-        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+        const orig = pc.onicegatheringstatechange;
+        pc.onicegatheringstatechange = () => { orig(); if (pc.iceGatheringState === 'complete') res(); };
       });
+
+      // Show candidate types that ended up in the SDP
+      const candidates = pc.localDescription.sdp.match(/^a=candidate:.+$/mg) || [];
+      candidates.forEach(c => log('in SDP: ' + c.split(' ').slice(6, 9).join(' ')));
 
       document.getElementById('answer-out').value = btoa(JSON.stringify(pc.localDescription));
       setStatus('Answer ready. Send the code above back to the sharer.');

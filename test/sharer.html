@@ -25,6 +25,8 @@
   <button id="btn-answer">Apply answer</button>
 
   <div id="status"></div>
+  <h3>Log</h3>
+  <pre id="log" style="background:#111;color:#ccc;padding:0.5rem;height:150px;overflow-y:auto;font-size:0.8rem;"></pre>
 
   <script>
     const STUN = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -35,6 +37,12 @@
       const el = document.getElementById('status');
       el.textContent = msg;
       el.className = cls || '';
+    }
+
+    function log(msg) {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
     }
 
     document.getElementById('btn-offer').addEventListener('click', async () => {
@@ -49,19 +57,33 @@
       dc.onmessage = e => setStatus('Got: ' + e.data + ' — connection works!', 'ok');
       dc.onerror   = e => setStatus('DataChannel error: ' + e, 'err');
 
+      pc.onicecandidate = e => {
+        if (e.candidate) log('candidate: ' + e.candidate.type + ' ' + e.candidate.address + ':' + e.candidate.port);
+        else             log('ICE gathering done');
+      };
+
       pc.oniceconnectionstatechange = () => {
+        log('iceConnectionState → ' + pc.iceConnectionState);
         if (['failed','disconnected','closed'].includes(pc.iceConnectionState))
           setStatus('ICE: ' + pc.iceConnectionState, 'err');
       };
 
+      pc.onicegatheringstatechange = () => log('gatheringState → ' + pc.iceGatheringState);
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      log('Local description set, gathering…');
 
       // Wait for ICE gathering to finish so the SDP is self-contained
       await new Promise(res => {
         if (pc.iceGatheringState === 'complete') return res();
-        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+        const orig = pc.onicegatheringstatechange;
+        pc.onicegatheringstatechange = () => { orig(); if (pc.iceGatheringState === 'complete') res(); };
       });
+
+      // Show candidate types that ended up in the SDP
+      const candidates = pc.localDescription.sdp.match(/^a=candidate:.+$/mg) || [];
+      candidates.forEach(c => log('in SDP: ' + c.split(' ').slice(6, 9).join(' ')));
 
       document.getElementById('offer-out').value = btoa(JSON.stringify(pc.localDescription));
       setStatus('Offer ready. Send the code above to the viewer, then paste their answer below.');
