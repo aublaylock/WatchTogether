@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>StreamShare — Sharer test</title>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    textarea { width: 100%; height: 120px; margin: 0.5rem 0; }
+    button { padding: 0.5rem 1rem; cursor: pointer; }
+    #status { margin-top: 1rem; font-weight: bold; }
+    .ok  { color: green; }
+    .err { color: red; }
+  </style>
+</head>
+<body>
+  <h2>Sharer</h2>
+
+  <h3>Step 1 — Generate offer</h3>
+  <button id="btn-offer">Create offer</button>
+  <textarea id="offer-out" readonly placeholder="Offer code will appear here…"></textarea>
+  <small>Copy this and send it to the viewer.</small>
+
+  <h3>Step 2 — Paste viewer's answer</h3>
+  <textarea id="answer-in" placeholder="Paste the viewer's answer code here…"></textarea>
+  <button id="btn-answer">Apply answer</button>
+
+  <div id="status"></div>
+
+  <script>
+    const STUN = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+
+    let pc, dc;
+
+    function setStatus(msg, cls) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = cls || '';
+    }
+
+    document.getElementById('btn-offer').addEventListener('click', async () => {
+      pc = new RTCPeerConnection(STUN);
+
+      // DataChannel for ping/pong test
+      dc = pc.createDataChannel('test');
+      dc.onopen = () => {
+        setStatus('Connected! Sending ping…', 'ok');
+        dc.send('ping');
+      };
+      dc.onmessage = e => setStatus('Got: ' + e.data + ' — connection works!', 'ok');
+      dc.onerror   = e => setStatus('DataChannel error: ' + e, 'err');
+
+      pc.oniceconnectionstatechange = () => {
+        if (['failed','disconnected','closed'].includes(pc.iceConnectionState))
+          setStatus('ICE: ' + pc.iceConnectionState, 'err');
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering to finish so the SDP is self-contained
+      await new Promise(res => {
+        if (pc.iceGatheringState === 'complete') return res();
+        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+      });
+
+      document.getElementById('offer-out').value = btoa(JSON.stringify(pc.localDescription));
+      setStatus('Offer ready. Send the code above to the viewer, then paste their answer below.');
+    });
+
+    document.getElementById('btn-answer').addEventListener('click', async () => {
+      const raw = document.getElementById('answer-in').value.trim();
+      if (!raw || !pc) return;
+      try {
+        const answer = JSON.parse(atob(raw));
+        await pc.setRemoteDescription(answer);
+        setStatus('Answer applied — waiting for connection…');
+      } catch (e) {
+        setStatus('Bad answer code: ' + e.message, 'err');
+      }
+    });
+  </script>
+</body>
+</html>

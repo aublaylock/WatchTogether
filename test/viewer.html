@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>StreamShare — Viewer test</title>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    textarea { width: 100%; height: 120px; margin: 0.5rem 0; }
+    button { padding: 0.5rem 1rem; cursor: pointer; }
+    #status { margin-top: 1rem; font-weight: bold; }
+    .ok  { color: green; }
+    .err { color: red; }
+  </style>
+</head>
+<body>
+  <h2>Viewer</h2>
+
+  <h3>Step 1 — Paste sharer's offer</h3>
+  <textarea id="offer-in" placeholder="Paste the sharer's offer code here…"></textarea>
+  <button id="btn-connect">Connect</button>
+  <small>This generates your answer code.</small>
+
+  <h3>Step 2 — Send answer back to sharer</h3>
+  <textarea id="answer-out" readonly placeholder="Your answer code will appear here…"></textarea>
+  <small>Copy this and send it to the sharer.</small>
+
+  <div id="status"></div>
+
+  <script>
+    const STUN = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+
+    function setStatus(msg, cls) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = cls || '';
+    }
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      const raw = document.getElementById('offer-in').value.trim();
+      if (!raw) return;
+
+      let offer;
+      try { offer = JSON.parse(atob(raw)); }
+      catch (e) { setStatus('Bad offer code: ' + e.message, 'err'); return; }
+
+      const pc = new RTCPeerConnection(STUN);
+
+      pc.ondatachannel = e => {
+        const dc = e.channel;
+        dc.onopen    = () => setStatus('Connected!', 'ok');
+        dc.onmessage = ev => {
+          setStatus('Got: ' + ev.data + ' — replying with pong…', 'ok');
+          dc.send('pong');
+        };
+        dc.onerror = ev => setStatus('DataChannel error: ' + ev, 'err');
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (['failed','disconnected','closed'].includes(pc.iceConnectionState))
+          setStatus('ICE: ' + pc.iceConnectionState, 'err');
+      };
+
+      await pc.setRemoteDescription(offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Wait for ICE gathering to finish
+      await new Promise(res => {
+        if (pc.iceGatheringState === 'complete') return res();
+        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+      });
+
+      document.getElementById('answer-out').value = btoa(JSON.stringify(pc.localDescription));
+      setStatus('Answer ready. Send the code above back to the sharer.');
+    });
+  </script>
+</body>
+</html>
