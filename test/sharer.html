@@ -4,39 +4,87 @@
   <meta charset="UTF-8">
   <title>StreamShare — Sharer test</title>
   <style>
-    body { font-family: monospace; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-    textarea { width: 100%; height: 120px; margin: 0.5rem 0; }
-    button { padding: 0.5rem 1rem; cursor: pointer; }
-    #status { margin-top: 1rem; font-weight: bold; }
-    .ok  { color: green; }
-    .err { color: red; }
+    * { box-sizing: border-box; }
+    body { font-family: monospace; max-width: 700px; margin: 2rem auto; padding: 0 1rem; background: #0e0e10; color: #eee; }
+    h2 { color: #e2ff5d; }
+    h3 { color: #aaa; margin-top: 1.5rem; }
+    button { padding: 0.5rem 1rem; cursor: pointer; background: #e2ff5d; border: none; font-family: monospace; font-weight: bold; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    textarea { width: 100%; height: 100px; background: #1a1a1d; color: #eee; border: 1px solid #333; padding: 0.4rem; font-family: monospace; font-size: 0.8rem; }
+    input[type=text] { width: 100%; background: #1a1a1d; color: #eee; border: 1px solid #333; padding: 0.4rem; font-family: monospace; margin-bottom: 0.3rem; }
+    label { font-size: 0.85rem; color: #aaa; }
+    pre { background: #111; padding: 0.5rem; height: 200px; overflow-y: auto; font-size: 0.78rem; line-height: 1.4; margin: 0; }
+    .card { border: 1px solid #333; padding: 0.8rem; margin: 0.5rem 0; }
+    .ok   { color: #6f6; }
+    .warn { color: #fa0; }
+    .err  { color: #f55; }
+    .dim  { color: #666; }
+    #status { font-size: 1rem; font-weight: bold; margin: 0.5rem 0; min-height: 1.4em; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    td, th { border: 1px solid #333; padding: 0.3rem 0.5rem; text-align: left; }
+    th { background: #1a1a1d; color: #aaa; }
   </style>
 </head>
 <body>
   <h2>Sharer</h2>
 
-  <h3>Step 1 — Generate offer</h3>
-  <button id="btn-offer">Create offer</button>
-  <textarea id="offer-out" readonly placeholder="Offer code will appear here…"></textarea>
-  <small>Copy this and send it to the viewer.</small>
+  <!-- ── TURN credentials ───────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">TURN credentials (optional)</h3>
+    <label>TURN URL (e.g. turn:yoursubdomain.relay.metered.ca:80)</label>
+    <input type="text" id="turn-url" placeholder="turn:openrelay.metered.ca:80">
+    <label>Username</label>
+    <input type="text" id="turn-user" placeholder="openrelayproject">
+    <label>Credential</label>
+    <input type="text" id="turn-pass" placeholder="openrelayproject">
+  </div>
 
-  <h3>Step 2 — Paste viewer's answer</h3>
-  <textarea id="answer-in" placeholder="Paste the viewer's answer code here…"></textarea>
-  <button id="btn-answer">Apply answer</button>
+  <!-- ── Phase 1 ────────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Phase 1 — Gather diagnostic</h3>
+    <p style="color:#aaa;font-size:0.85rem;margin:0 0 0.5rem">Tests each ICE config locally. No exchange needed.</p>
+    <button id="btn-gather">Run gather test</button>
+    <div style="margin-top:0.8rem">
+      <table id="gather-table">
+        <thead><tr><th>Config</th><th>host</th><th>srflx</th><th>relay</th><th>time (ms)</th><th>result</th></tr></thead>
+        <tbody id="gather-body"></tbody>
+      </table>
+    </div>
+  </div>
 
-  <div id="status"></div>
-  <h3>Log</h3>
-  <pre id="log" style="background:#111;color:#ccc;padding:0.5rem;height:150px;overflow-y:auto;font-size:0.8rem;"></pre>
+  <!-- ── Phase 2 ────────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Phase 2 — Connection test</h3>
+    <button id="btn-offer">1. Create offer</button>
+    <textarea id="offer-out" readonly placeholder="Offer code appears here — copy and send to viewer…" style="margin-top:0.5rem"></textarea>
+
+    <div style="margin-top:0.8rem">
+      <textarea id="answer-in" placeholder="Paste viewer's answer code here…"></textarea>
+      <button id="btn-answer">2. Apply answer</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <!-- ── Log ───────────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Connection log</h3>
+    <pre id="log"></pre>
+  </div>
 
   <script>
-    const STUN = { iceServers: [
-      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-      { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-    ] };
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
-    let pc, dc;
+    function ts() { return new Date().toISOString().slice(11, 23); }
+
+    function log(msg, cls) {
+      const el = document.getElementById('log');
+      const line = document.createElement('span');
+      line.className = cls || '';
+      line.textContent = '[' + ts() + '] ' + msg + '\n';
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
 
     function setStatus(msg, cls) {
       const el = document.getElementById('status');
@@ -44,64 +92,205 @@
       el.className = cls || '';
     }
 
-    function log(msg) {
-      const el = document.getElementById('log');
-      el.textContent += msg + '\n';
-      el.scrollTop = el.scrollHeight;
+    function getIceConfigs() {
+      const turnUrl  = document.getElementById('turn-url').value.trim();
+      const turnUser = document.getElementById('turn-user').value.trim();
+      const turnPass = document.getElementById('turn-pass').value.trim();
+
+      const configs = [
+        { label: 'No ICE servers',  cfg: { iceServers: [] } },
+        { label: 'STUN (Google)',   cfg: { iceServers: [{ urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302'] }] } },
+      ];
+
+      if (turnUrl && turnUser && turnPass) {
+        configs.push({
+          label: 'STUN + TURN (custom)',
+          cfg: { iceServers: [
+            { urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302'] },
+            { urls: turnUrl,                            username: turnUser, credential: turnPass },
+            { urls: turnUrl.replace(':80',':443').replace('turn:','turns:'), username: turnUser, credential: turnPass },
+          ]}
+        });
+      } else {
+        configs.push({
+          label: 'STUN + TURN (openrelay)',
+          cfg: { iceServers: [
+            { urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302'] },
+            { urls: 'turn:openrelay.metered.ca:80',              username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443',             username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+          ]}
+        });
+      }
+
+      return configs;
+    }
+
+    // ── Phase 1: gather diagnostic ───────────────────────────────────────────
+
+    async function gatherTest(label, cfg) {
+      const start = Date.now();
+      const counts = { host: 0, srflx: 0, relay: 0, other: 0 };
+      const pc = new RTCPeerConnection(cfg);
+      pc.createDataChannel('probe');
+
+      const done = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => { pc.close(); reject(new Error('timeout')); }, 8000);
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
+        };
+        pc.onicecandidate = e => {
+          if (e.candidate) counts[e.candidate.type] = (counts[e.candidate.type] || 0) + 1;
+        };
+      });
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await done;
+        pc.close();
+        return { ok: true, counts, ms: Date.now() - start };
+      } catch (err) {
+        pc.close();
+        return { ok: false, error: err.message, counts, ms: Date.now() - start };
+      }
+    }
+
+    document.getElementById('btn-gather').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-gather');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      document.getElementById('gather-body').innerHTML = '';
+
+      const configs = getIceConfigs();
+
+      for (const { label, cfg } of configs) {
+        log('Gather: ' + label + '…');
+        const row = document.getElementById('gather-body').insertRow();
+        row.insertCell().textContent = label;
+        const hCell = row.insertCell(); hCell.textContent = '…';
+        const sCell = row.insertCell(); sCell.textContent = '…';
+        const rCell = row.insertCell(); rCell.textContent = '…';
+        const tCell = row.insertCell(); tCell.textContent = '…';
+        const resCell = row.insertCell(); resCell.textContent = '…';
+
+        const result = await gatherTest(label, cfg);
+
+        hCell.textContent = result.counts.host  || 0;
+        sCell.textContent = result.counts.srflx || 0;
+        rCell.textContent = result.counts.relay || 0;
+        tCell.textContent = result.ms;
+
+        if (!result.ok) {
+          resCell.textContent = 'error: ' + result.error;
+          resCell.className = 'err';
+          log('  → error: ' + result.error, 'err');
+        } else if (result.counts.relay) {
+          resCell.textContent = 'relay OK';
+          resCell.className = 'ok';
+          log('  → relay candidates gathered ✓', 'ok');
+        } else if (result.counts.srflx) {
+          resCell.textContent = 'srflx only';
+          resCell.className = 'warn';
+          log('  → srflx only (P2P may fail if viewer has symmetric NAT)', 'warn');
+        } else {
+          resCell.textContent = 'host only';
+          resCell.className = 'err';
+          log('  → host only', 'err');
+        }
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Run gather test';
+      log('Gather phase complete.');
+    });
+
+    // ── Phase 2: connection test ──────────────────────────────────────────────
+
+    let pc, dc;
+
+    function bestConfig() {
+      // Uses custom TURN if filled in, otherwise falls back through the list
+      const configs = getIceConfigs();
+      return configs[configs.length - 1].cfg; // last entry is always the most capable
     }
 
     document.getElementById('btn-offer').addEventListener('click', async () => {
-      pc = new RTCPeerConnection(STUN);
+      const btn = document.getElementById('btn-offer');
+      btn.disabled = true;
 
-      // DataChannel for ping/pong test
+      const cfg = bestConfig();
+      log('Creating offer with config: ' + JSON.stringify(cfg.iceServers.map(s => s.urls)));
+      pc = new RTCPeerConnection(cfg);
+
       dc = pc.createDataChannel('test');
       dc.onopen = () => {
+        const rtt = Date.now() - connectStart;
+        log('DataChannel open — connection established in ' + rtt + 'ms total', 'ok');
         setStatus('Connected! Sending ping…', 'ok');
         dc.send('ping');
       };
-      dc.onmessage = e => setStatus('Got: ' + e.data + ' — connection works!', 'ok');
-      dc.onerror   = e => setStatus('DataChannel error: ' + e, 'err');
+      dc.onmessage = e => {
+        log('Received: ' + e.data + ' — P2P works!', 'ok');
+        setStatus('Got: ' + e.data + ' — connection works!', 'ok');
+      };
+      dc.onerror = e => log('DataChannel error: ' + e, 'err');
 
       pc.onicecandidate = e => {
-        if (e.candidate) log('candidate: ' + e.candidate.type + ' ' + e.candidate.address + ':' + e.candidate.port);
-        else             log('ICE gathering done');
+        if (e.candidate) log('  candidate: ' + e.candidate.type + ' ' + e.candidate.address + ':' + e.candidate.port);
       };
 
       pc.oniceconnectionstatechange = () => {
-        log('iceConnectionState → ' + pc.iceConnectionState);
+        log('iceConnectionState → ' + pc.iceConnectionState,
+          pc.iceConnectionState === 'connected' ? 'ok' :
+          ['failed','disconnected','closed'].includes(pc.iceConnectionState) ? 'err' : '');
         if (['failed','disconnected','closed'].includes(pc.iceConnectionState))
           setStatus('ICE: ' + pc.iceConnectionState, 'err');
       };
 
       pc.onicegatheringstatechange = () => log('gatheringState → ' + pc.iceGatheringState);
 
+      pc.onconnectionstatechange = () => log('connectionState → ' + pc.connectionState,
+        pc.connectionState === 'connected' ? 'ok' :
+        ['failed','disconnected','closed'].includes(pc.connectionState) ? 'err' : '');
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      log('Local description set, gathering…');
+      log('Local description set, gathering ICE candidates…');
 
-      // Wait for ICE gathering to finish so the SDP is self-contained
       await new Promise(res => {
         if (pc.iceGatheringState === 'complete') return res();
-        const orig = pc.onicegatheringstatechange;
-        pc.onicegatheringstatechange = () => { orig(); if (pc.iceGatheringState === 'complete') res(); };
+        const prev = pc.onicegatheringstatechange;
+        pc.onicegatheringstatechange = () => { prev(); if (pc.iceGatheringState === 'complete') res(); };
       });
 
-      // Show candidate types that ended up in the SDP
-      const candidates = pc.localDescription.sdp.match(/^a=candidate:.+$/mg) || [];
-      candidates.forEach(c => log('in SDP: ' + c.split(' ').slice(6, 9).join(' ')));
+      const sdpCandidates = pc.localDescription.sdp.match(/^a=candidate:.+$/mg) || [];
+      log('Candidates in offer SDP:');
+      sdpCandidates.forEach(c => log('  ' + c.split(' ').slice(6, 10).join(' ')));
 
       document.getElementById('offer-out').value = btoa(JSON.stringify(pc.localDescription));
-      setStatus('Offer ready. Send the code above to the viewer, then paste their answer below.');
+      setStatus('Offer ready — copy the code above and send it to the viewer.');
+      btn.disabled = false;
     });
+
+    let connectStart;
 
     document.getElementById('btn-answer').addEventListener('click', async () => {
       const raw = document.getElementById('answer-in').value.trim();
       if (!raw || !pc) return;
       try {
         const answer = JSON.parse(atob(raw));
+
+        const sdpCandidates = answer.sdp.match(/^a=candidate:.+$/mg) || [];
+        log('Candidates in answer SDP:');
+        sdpCandidates.forEach(c => log('  ' + c.split(' ').slice(6, 10).join(' ')));
+
+        connectStart = Date.now();
         await pc.setRemoteDescription(answer);
-        setStatus('Answer applied — waiting for connection…');
+        log('Remote description set — ICE negotiation starting…');
+        setStatus('Answer applied — waiting for ICE…');
       } catch (e) {
+        log('Bad answer code: ' + e.message, 'err');
         setStatus('Bad answer code: ' + e.message, 'err');
       }
     });
