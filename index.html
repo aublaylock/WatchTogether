@@ -230,7 +230,7 @@
 
       const answerCode = btoa(JSON.stringify(pc.localDescription.toJSON()));
       document.getElementById('answer-out').value = answerCode;
-      document.getElementById('answer-section').style.display = '';
+      document.getElementById('answer-section').style.display = 'flex';
       document.getElementById('connect-card').style.display = 'none';
 
     } catch (e) {
