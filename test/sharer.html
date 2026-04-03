@@ -186,11 +186,17 @@
       await pc.setLocalDescription(await pc.createOffer());
       log('Gathering ICE candidates…');
 
-      await new Promise(res => {
-        if (pc.iceGatheringState === 'complete') return res();
-        const prev = pc.onicegatheringstatechange;
-        pc.onicegatheringstatechange = () => { prev(); if (pc.iceGatheringState === 'complete') res(); };
-      });
+      // Cap wait at 2s — UDP candidates (host + srflx) arrive in <100ms.
+      // Waiting for 'complete' can block 30-40s on TCP candidate timeouts.
+      await Promise.race([
+        new Promise(res => {
+          if (pc.iceGatheringState === 'complete') return res();
+          const prev = pc.onicegatheringstatechange;
+          pc.onicegatheringstatechange = () => { prev(); if (pc.iceGatheringState === 'complete') res(); };
+        }),
+        new Promise(res => setTimeout(res, 2000))
+      ]);
+      log('Generating offer (gathering capped at 2s)…');
 
       const sdp = pc.localDescription.sdp.match(/^a=candidate:.+$/mg) || [];
       log('Candidates in offer SDP:');
