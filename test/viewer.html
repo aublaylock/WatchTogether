@@ -25,6 +25,23 @@
 <body>
   <h2>Viewer</h2>
 
+  <!-- ── TURN credentials ───────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">TURN credentials (optional — must match sharer)</h3>
+    <label style="font-size:0.85rem;color:#aaa">TURN URL (e.g. turn:yourdomain.com:3478)</label>
+    <input type="text" id="turn-url" placeholder="turn:yourdomain.com:3478" style="width:100%;background:#1a1a1d;color:#eee;border:1px solid #333;padding:0.4rem;font-family:monospace;margin:0.2rem 0 0.5rem">
+    <div style="display:flex;gap:0.5rem">
+      <div style="flex:1">
+        <label style="font-size:0.85rem;color:#aaa">Username</label>
+        <input type="text" id="turn-user" placeholder="streamshare" style="width:100%;background:#1a1a1d;color:#eee;border:1px solid #333;padding:0.4rem;font-family:monospace;margin-top:0.2rem">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:0.85rem;color:#aaa">Credential</label>
+        <input type="text" id="turn-pass" placeholder="yourpassword" style="width:100%;background:#1a1a1d;color:#eee;border:1px solid #333;padding:0.4rem;font-family:monospace;margin-top:0.2rem">
+      </div>
+    </div>
+  </div>
+
   <!-- ── Phase 1 ────────────────────────────────────────── -->
   <div class="card">
     <h3 style="margin-top:0">Phase 1 — Gather diagnostic</h3>
@@ -32,7 +49,7 @@
     <button id="btn-gather">Run gather test</button>
     <div style="margin-top:0.8rem">
       <table>
-        <thead><tr><th>Config</th><th>host</th><th>srflx</th><th>time (ms)</th><th>result</th></tr></thead>
+        <thead><tr><th>Config</th><th>host</th><th>srflx</th><th>relay</th><th>time (ms)</th><th>result</th></tr></thead>
         <tbody id="gather-body"></tbody>
       </table>
     </div>
@@ -58,7 +75,19 @@
   </div>
 
   <script>
-    const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+    const STUN_SERVERS = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
+    const ICE = { iceServers: [{ urls: STUN_SERVERS }] };
+
+    function getIceConfig() {
+      const url  = document.getElementById('turn-url').value.trim();
+      const user = document.getElementById('turn-user').value.trim();
+      const pass = document.getElementById('turn-pass').value.trim();
+      if (!url || !user || !pass) return ICE;
+      return { iceServers: [
+        { urls: STUN_SERVERS },
+        { urls: url, username: user, credential: pass },
+      ]};
+    }
 
     function ts() { return new Date().toISOString().slice(11, 23); }
 
@@ -79,14 +108,14 @@
 
     // ── Phase 1 ──────────────────────────────────────────────────────────────
 
-    async function gatherTest(label, cfg) {
+    async function gatherTest(label, cfg, timeoutMs = 5000) {
       const start = Date.now();
-      const counts = { host: 0, srflx: 0 };
+      const counts = { host: 0, srflx: 0, relay: 0 };
       const pc = new RTCPeerConnection(cfg);
       pc.createDataChannel('probe');
 
       const done = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => { pc.close(); reject(new Error('timeout')); }, 5000);
+        const timeout = setTimeout(() => { pc.close(); reject(new Error('timeout')); }, timeoutMs);
         pc.onicegatheringstatechange = () => {
           if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
         };
@@ -112,31 +141,49 @@
       btn.textContent = 'Running…';
       document.getElementById('gather-body').innerHTML = '';
 
-      for (const { label, cfg } of [
-        { label: 'No ICE servers', cfg: { iceServers: [] } },
-        { label: 'STUN (Google)',  cfg: ICE },
-      ]) {
-        log('Gather: ' + label + '…');
+      const turnCfg = getIceConfig();
+      const hasTurn = turnCfg !== ICE;
+
+      const configs = [
+        { label: 'No ICE servers',  cfg: { iceServers: [] }, timeout: 5000 },
+        { label: 'STUN (Google)',   cfg: ICE,                timeout: 5000 },
+        { label: 'STUN + TURN' + (hasTurn ? '' : ' (no credentials)'),
+          cfg: hasTurn ? turnCfg : null, timeout: 10000 },
+      ];
+
+      for (const { label, cfg, timeout } of configs) {
         const row = document.getElementById('gather-body').insertRow();
         row.insertCell().textContent = label;
         const hCell   = row.insertCell(); hCell.textContent   = '…';
         const sCell   = row.insertCell(); sCell.textContent   = '…';
+        const rCell   = row.insertCell(); rCell.textContent   = '…';
         const tCell   = row.insertCell(); tCell.textContent   = '…';
         const resCell = row.insertCell(); resCell.textContent = '…';
 
-        const r = await gatherTest(label, cfg);
+        if (!cfg) {
+          hCell.textContent = sCell.textContent = rCell.textContent = tCell.textContent = '—';
+          resCell.textContent = 'skipped — no credentials'; resCell.className = 'warn';
+          continue;
+        }
+
+        log('Gather: ' + label + '…');
+        const r = await gatherTest(label, cfg, timeout);
         hCell.textContent = r.counts.host  || 0;
         sCell.textContent = r.counts.srflx || 0;
+        rCell.textContent = r.counts.relay || 0;
         tCell.textContent = r.ms;
 
         if (!r.ok) {
           resCell.textContent = 'error: ' + r.error; resCell.className = 'err';
           log('  → error: ' + r.error, 'err');
+        } else if (r.counts.relay) {
+          resCell.textContent = 'relay OK ✓'; resCell.className = 'ok';
+          log('  → relay candidates gathered ✓', 'ok');
         } else if (r.counts.srflx) {
-          resCell.textContent = 'srflx OK — P2P likely'; resCell.className = 'ok';
-          log('  → srflx gathered ✓', 'ok');
+          resCell.textContent = 'srflx only'; resCell.className = 'warn';
+          log('  → srflx only', 'warn');
         } else {
-          resCell.textContent = 'host only — P2P will fail'; resCell.className = 'err';
+          resCell.textContent = 'host only'; resCell.className = 'err';
           log('  → host only', 'err');
         }
       }
@@ -160,7 +207,9 @@
       log('Candidates in offer SDP:');
       sdpIn.forEach(c => log('  ' + c.split(' ').slice(6, 10).join(' ')));
 
-      const pc = new RTCPeerConnection(ICE);
+      const cfg = getIceConfig();
+      log('Using ICE config: ' + JSON.stringify(cfg.iceServers.map(s => s.urls)));
+      const pc = new RTCPeerConnection(cfg);
       const connectStart = Date.now();
 
       pc.ondatachannel = e => {
