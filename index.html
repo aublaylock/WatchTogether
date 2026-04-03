@@ -201,12 +201,15 @@
 
     const pc = new RTCPeerConnection(iceConfig);
 
-    // Show video as soon as tracks arrive
+    // Attach tracks when they arrive, but only reveal the video once it's actually playing
     pc.ontrack = e => {
       const video = document.getElementById('stream-video');
       if (!video.srcObject) {
         video.srcObject = e.streams[0] ?? new MediaStream([e.track]);
-        document.getElementById('video-wrap').style.display = 'block';
+        video.onplaying = () => {
+          document.getElementById('video-wrap').style.display = 'block';
+          document.getElementById('answer-section').style.display = 'none';
+        };
       } else {
         e.streams[0]?.getTracks().forEach(t => video.srcObject.addTrack(t));
       }
