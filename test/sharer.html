@@ -69,6 +69,16 @@
     <div id="status"></div>
   </div>
 
+  <!-- ── Chat ─────────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Chat</h3>
+    <pre id="chat-log" style="height:150px"></pre>
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+      <input type="text" id="chat-input" placeholder="Type a message…" disabled style="flex:1;background:#1a1a1d;color:#eee;border:1px solid #333;padding:0.4rem;font-family:monospace">
+      <button id="btn-send" disabled>Send</button>
+    </div>
+  </div>
+
   <!-- ── Log ───────────────────────────────────────────── -->
   <div class="card">
     <h3 style="margin-top:0">Connection log</h3>
@@ -105,6 +115,21 @@
       const el = document.getElementById('status');
       el.textContent = msg;
       el.className = cls || '';
+    }
+
+    function chatMsg(sender, text) {
+      const el = document.getElementById('chat-log');
+      const line = document.createElement('span');
+      line.className = sender === 'You' ? 'ok' : '';
+      line.textContent = sender + ': ' + text + '\n';
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function enableChat() {
+      document.getElementById('chat-input').disabled = false;
+      document.getElementById('btn-send').disabled = false;
+      document.getElementById('chat-input').focus();
     }
 
     // ── Phase 1 ──────────────────────────────────────────────────────────────
@@ -209,12 +234,12 @@
       dc = pc.createDataChannel('test');
       dc.onopen = () => {
         log('DataChannel open — connected in ' + (Date.now() - connectStart) + 'ms', 'ok');
-        setStatus('Connected! Sending ping…', 'ok');
-        dc.send('ping');
+        setStatus('Connected!', 'ok');
+        enableChat();
       };
       dc.onmessage = e => {
-        log('Received: ' + e.data + ' — P2P works!', 'ok');
-        setStatus('Got: ' + e.data + ' — connection works!', 'ok');
+        log('Received: ' + e.data, 'ok');
+        chatMsg('Friend', e.data);
       };
 
       pc.onicecandidate = e => {
@@ -254,6 +279,19 @@
       document.getElementById('offer-out').value = btoa(JSON.stringify(pc.localDescription));
       setStatus('Offer ready — copy the code above and send it to the viewer.');
       btn.disabled = false;
+    });
+
+    document.getElementById('btn-send').addEventListener('click', () => {
+      const input = document.getElementById('chat-input');
+      const msg = input.value.trim();
+      if (!msg || !dc || dc.readyState !== 'open') return;
+      dc.send(msg);
+      chatMsg('You', msg);
+      input.value = '';
+    });
+
+    document.getElementById('chat-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('btn-send').click();
     });
 
     document.getElementById('btn-answer').addEventListener('click', async () => {

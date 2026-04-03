@@ -68,6 +68,16 @@
     <div id="status"></div>
   </div>
 
+  <!-- ── Chat ─────────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Chat</h3>
+    <pre id="chat-log" style="height:150px"></pre>
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+      <input type="text" id="chat-input" placeholder="Type a message…" disabled style="flex:1;background:#1a1a1d;color:#eee;border:1px solid #333;padding:0.4rem;font-family:monospace">
+      <button id="btn-send" disabled>Send</button>
+    </div>
+  </div>
+
   <!-- ── Log ───────────────────────────────────────────── -->
   <div class="card">
     <h3 style="margin-top:0">Connection log</h3>
@@ -105,6 +115,36 @@
       el.textContent = msg;
       el.className = cls || '';
     }
+
+    function chatMsg(sender, text) {
+      const el = document.getElementById('chat-log');
+      const line = document.createElement('span');
+      line.className = sender === 'You' ? 'ok' : '';
+      line.textContent = sender + ': ' + text + '\n';
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    let viewerDc;
+
+    function enableChat() {
+      document.getElementById('chat-input').disabled = false;
+      document.getElementById('btn-send').disabled = false;
+      document.getElementById('chat-input').focus();
+    }
+
+    document.getElementById('btn-send').addEventListener('click', () => {
+      const input = document.getElementById('chat-input');
+      const msg = input.value.trim();
+      if (!msg || !viewerDc || viewerDc.readyState !== 'open') return;
+      viewerDc.send(msg);
+      chatMsg('You', msg);
+      input.value = '';
+    });
+
+    document.getElementById('chat-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('btn-send').click();
+    });
 
     // ── Phase 1 ──────────────────────────────────────────────────────────────
 
@@ -213,15 +253,15 @@
       const connectStart = Date.now();
 
       pc.ondatachannel = e => {
-        const dc = e.channel;
-        dc.onopen = () => {
+        viewerDc = e.channel;
+        viewerDc.onopen = () => {
           log('DataChannel open — connected in ' + (Date.now() - connectStart) + 'ms', 'ok');
           setStatus('Connected!', 'ok');
+          enableChat();
         };
-        dc.onmessage = ev => {
-          log('Received: ' + ev.data + ' — replying with pong…', 'ok');
-          setStatus('Got: ' + ev.data + ' — replying…', 'ok');
-          dc.send('pong');
+        viewerDc.onmessage = ev => {
+          log('Received: ' + ev.data, 'ok');
+          chatMsg('Friend', ev.data);
         };
       };
 
