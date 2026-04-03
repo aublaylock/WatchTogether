@@ -217,9 +217,11 @@
   }
 
   function relayOnlySdp(desc) {
-    const sdp = desc.sdp.split('\n').filter(line =>
-      !line.startsWith('a=candidate:') || line.includes('typ relay')
-    ).join('\n');
+    const lines = desc.sdp.split('\n');
+    const relayCandidates = lines.filter(l => l.startsWith('a=candidate:') && l.includes('typ relay'));
+    // Only filter if we actually have relay candidates — otherwise keep all
+    if (!relayCandidates.length) return desc;
+    const sdp = lines.filter(l => !l.startsWith('a=candidate:') || l.includes('typ relay')).join('\n');
     return { ...desc, sdp };
   }
 
@@ -234,8 +236,13 @@
     if (!raw) { setError('Paste an offer code first.'); return; }
 
     let parsed;
-    try { parsed = JSON.parse(await decompress(raw)); }
-    catch (e) { setError('Invalid offer code: ' + e.message); return; }
+    try {
+      // Try compressed format first, fall back to legacy plain btoa
+      let json;
+      try { json = await decompress(raw); }
+      catch (_) { json = atob(raw); }
+      parsed = JSON.parse(json);
+    } catch (e) { setError('Invalid offer code: ' + e.message); return; }
 
     const btn = document.getElementById('btn-connect');
     btn.disabled = true;

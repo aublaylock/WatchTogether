@@ -42,11 +42,12 @@ async function decompress(b64) {
   return new TextDecoder().decode(out);
 }
 
-// Strip non-relay candidates so encoded codes are shorter
+// Strip non-relay candidates so encoded codes are shorter (only if relay candidates exist)
 function relayOnlySdp(desc) {
-  const sdp = desc.sdp.split('\n').filter(line =>
-    !line.startsWith('a=candidate:') || line.includes('typ relay')
-  ).join('\n');
+  const lines = desc.sdp.split('\n');
+  const relayCandidates = lines.filter(l => l.startsWith('a=candidate:') && l.includes('typ relay'));
+  if (!relayCandidates.length) return desc;
+  const sdp = lines.filter(l => !l.startsWith('a=candidate:') || l.includes('typ relay')).join('\n');
   return { ...desc, sdp };
 }
 
