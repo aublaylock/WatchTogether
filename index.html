@@ -225,6 +225,8 @@
     return { ...desc, sdp };
   }
 
+  let pc;  // module-scope so GC doesn't collect it after answer is generated
+
   function setError(msg) {
     const el = document.getElementById('error-msg');
     el.textContent = msg;
@@ -253,7 +255,8 @@
     const iceServers = parsed.iceServers ?? [{ urls: STUN }];
     const iceConfig  = { iceServers };
 
-    const pc = new RTCPeerConnection(iceConfig);
+    if (pc) pc.close();
+    pc = new RTCPeerConnection(iceConfig);
 
     // Attach tracks when they arrive, but only reveal the video once it's actually playing
     pc.ontrack = e => {

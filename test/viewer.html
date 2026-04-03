@@ -126,6 +126,7 @@
     }
 
     let viewerDc;
+    let pc;  // module-scope so GC doesn't collect it after answer is generated
 
     function enableChat() {
       document.getElementById('chat-input').disabled = false;
@@ -249,7 +250,8 @@
 
       const cfg = getIceConfig();
       log('Using ICE config: ' + JSON.stringify(cfg.iceServers.map(s => s.urls)));
-      const pc = new RTCPeerConnection(cfg);
+      if (pc) pc.close();
+      pc = new RTCPeerConnection(cfg);
       const connectStart = Date.now();
 
       pc.ondatachannel = e => {
