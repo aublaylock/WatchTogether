@@ -2,33 +2,30 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StreamShare</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
-
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg: #0e0e10;
-    --surface: #18181b;
-    --border: #27272a;
-    --accent: #e2ff5d;
-    --accent-dim: rgba(226,255,93,0.12);
-    --text: #fafafa;
-    --muted: #71717a;
-    --red: #ff5d5d;
-    --red-dim: rgba(255,93,93,0.12);
+    --bg:         #0e0e10;
+    --surface:    #18181b;
+    --border:     #27272a;
+    --accent:     #e2ff5d;
+    --text:       #fafafa;
+    --muted:      #71717a;
+    --red:        #ff5d5d;
+    --red-dim:    rgba(255,93,93,0.12);
+    --green:      #6fdf6f;
+    --green-dim:  rgba(111,223,111,0.10);
   }
 
   body {
-    width: 280px;
+    width: 300px;
     background: var(--bg);
     color: var(--text);
-    font-family: 'DM Sans', sans-serif;
+    font-family: system-ui, sans-serif;
     font-size: 13px;
-    padding: 16px;
-    user-select: none;
+    padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -41,74 +38,89 @@
   }
 
   .logo {
-    width: 22px;
-    height: 22px;
+    width: 22px; height: 22px;
     background: var(--accent);
     border-radius: 5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
   }
-
   .logo svg { width: 13px; height: 13px; }
 
-  h1 {
-    font-size: 14px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    color: var(--text);
-  }
+  h1 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
 
-  .desc {
-    color: var(--muted);
-    line-height: 1.5;
+  label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+
+  input, textarea {
+    width: 100%;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-family: inherit;
     font-size: 12px;
+    outline: none;
   }
+  input:focus, textarea:focus { border-color: #3f3f46; }
+  textarea { resize: none; font-family: monospace; font-size: 11px; }
+
+  .row { display: flex; gap: 6px; }
+  .row > * { flex: 1; min-width: 0; }
 
   button {
     width: 100%;
-    padding: 9px 14px;
-    border: none;
-    border-radius: 8px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
+    padding: 8px 14px;
+    border: none; border-radius: 7px;
+    font-family: inherit; font-size: 13px; font-weight: 500;
     cursor: pointer;
-    transition: opacity 0.15s, transform 0.1s;
+    background: var(--accent);
+    color: #0e0e10;
+    transition: opacity 0.15s;
   }
-
-  button:active { transform: scale(0.98); }
-
-  .btn-secondary {
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
     background: var(--surface);
     color: var(--muted);
     border: 1px solid var(--border);
   }
-  .btn-secondary:hover    { color: var(--text); border-color: #3f3f46; }
-  .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary:hover:not(:disabled) { color: var(--text); border-color: #3f3f46; }
+  button.danger {
+    background: var(--red-dim);
+    color: var(--red);
+    border: 1px solid rgba(255,93,93,0.2);
+  }
+
+  .step-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
 
   .error-msg {
-    font-size: 12px;
-    color: var(--red);
+    font-size: 12px; color: var(--red);
     background: var(--red-dim);
     border: 1px solid rgba(255,93,93,0.2);
-    border-radius: 7px;
-    padding: 8px 10px;
+    border-radius: 6px;
+    padding: 7px 9px;
     line-height: 1.4;
     display: none;
   }
   .error-msg.visible { display: block; }
 
-  .preview-wrap {
-    display: none;
-    border-radius: 6px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    background: #000;
-    line-height: 0;
+  .connected-badge {
+    background: var(--green-dim);
+    border: 1px solid rgba(111,223,111,0.25);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
   }
-  .preview-wrap img { width: 100%; display: block; }
+  .connected-badge .dot { color: var(--green); font-size: 18px; }
+  .connected-badge .title { font-weight: 600; font-size: 14px; margin: 4px 0 2px; }
+  .connected-badge .sub { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -123,15 +135,53 @@
   <h1>StreamShare</h1>
 </header>
 
-<p class="desc">Share the video playing on this tab with a friend — they'll see exactly what you see, in real time.</p>
+<!-- ── Screen: idle ── -->
+<div data-screen="idle">
+  <div>
+    <label>TURN URL</label>
+    <input id="turn-url" type="text" placeholder="turn:standard.relay.metered.ca:80">
+  </div>
+  <div class="row">
+    <div>
+      <label>Username</label>
+      <input id="turn-user" type="text" placeholder="username">
+    </div>
+    <div>
+      <label>Credential</label>
+      <input id="turn-pass" type="password" placeholder="••••••••">
+    </div>
+  </div>
+  <button id="btn-start">Start Sharing</button>
+</div>
 
-<div class="preview-wrap" id="preview-wrap">
-  <img id="preview-img" alt="video preview"/>
+<!-- ── Screen: handshake ── -->
+<div data-screen="handshake" style="display:none">
+  <div>
+    <p class="step-label">1 — Send this to your friend</p>
+    <textarea id="offer-out" rows="4" readonly></textarea>
+    <button id="btn-copy" class="secondary" style="margin-top:5px">Copy code</button>
+  </div>
+
+  <hr class="divider">
+
+  <div>
+    <p class="step-label">2 — Paste their response</p>
+    <textarea id="answer-in" rows="4" placeholder="Paste answer code here…"></textarea>
+    <button id="btn-apply" style="margin-top:5px">Connect</button>
+  </div>
+</div>
+
+<!-- ── Screen: connected ── -->
+<div data-screen="connected" style="display:none">
+  <div class="connected-badge">
+    <div class="dot">●</div>
+    <div class="title">Live</div>
+    <div class="sub">Your friend is watching</div>
+  </div>
+  <button id="btn-stop" class="danger">Stop Sharing</button>
 </div>
 
 <div class="error-msg" id="error-msg"></div>
-
-<button class="btn-secondary" id="btn-preview">Preview video</button>
 
 <script src="popup.js"></script>
 </body>

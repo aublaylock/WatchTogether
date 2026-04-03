@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamShare — Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0e0e10;
+      --surface: #18181b;
+      --border:  #27272a;
+      --accent:  #e2ff5d;
+      --text:    #fafafa;
+      --muted:   #71717a;
+      --red:     #ff5d5d;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo {
+      width: 28px; height: 28px;
+      background: var(--accent);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo svg { width: 16px; height: 16px; }
+
+    h1 { font-size: 18px; font-weight: 600; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card h2 { font-size: 15px; font-weight: 600; }
+    .card p  { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: monospace;
+      font-size: 12px;
+      resize: none;
+      outline: none;
+    }
+    textarea:focus { border-color: #3f3f46; }
+
+    button {
+      width: 100%;
+      padding: 10px 16px;
+      border: none; border-radius: 8px;
+      font-family: inherit; font-size: 14px; font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #0e0e10;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.secondary {
+      background: var(--surface);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    .error {
+      font-size: 13px; color: var(--red);
+      background: rgba(255,93,93,0.1);
+      border: 1px solid rgba(255,93,93,0.2);
+      border-radius: 7px;
+      padding: 9px 12px;
+      display: none;
+    }
+    .error.visible { display: block; }
+
+    /* ── Video area ──────────────────────────────────────────────────────── */
+
+    #video-wrap {
+      width: 100%;
+      max-width: 900px;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+      display: none;
+      aspect-ratio: 16/9;
+    }
+
+    #stream-video {
+      width: 100%; height: 100%;
+      display: block;
+    }
+
+    /* ── Answer section ──────────────────────────────────────────────────── */
+
+    #answer-section { display: none; }
+
+    .step { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 13 13" fill="none">
+      <path d="M2 6.5L6.5 2L11 6.5L6.5 11L2 6.5Z" fill="#0e0e10"/>
+      <circle cx="6.5" cy="6.5" r="2" fill="#0e0e10"/>
+    </svg>
+  </div>
+  <h1>StreamShare</h1>
+</header>
+
+<!-- Video (shown once stream arrives) -->
+<div id="video-wrap">
+  <video id="stream-video" autoplay playsinline></video>
+</div>
+
+<!-- Connect card -->
+<div class="card" id="connect-card">
+  <h2>Join a stream</h2>
+  <p>Paste the code your friend sent you, then click Connect.</p>
+
+  <div>
+    <label>Offer code</label>
+    <textarea id="offer-in" rows="5" placeholder="Paste offer code here…"></textarea>
+  </div>
+
+  <button id="btn-connect">Connect</button>
+  <div class="error" id="error-msg"></div>
+</div>
+
+<!-- Answer card (shown after offer processed) -->
+<div class="card" id="answer-section">
+  <h2>Send this back</h2>
+  <p>Copy the code below and send it to your friend.</p>
+
+  <div>
+    <label>Answer code</label>
+    <textarea id="answer-out" rows="5" readonly></textarea>
+  </div>
+
+  <button id="btn-copy" class="secondary">Copy code</button>
+</div>
+
+<script>
+  const STUN = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
+
+  function setError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.classList.toggle('visible', !!msg);
+  }
+
+  document.getElementById('btn-connect').addEventListener('click', async () => {
+    const raw = document.getElementById('offer-in').value.trim();
+    if (!raw) { setError('Paste an offer code first.'); return; }
+
+    let parsed;
+    try { parsed = JSON.parse(atob(raw)); }
+    catch (e) { setError('Invalid offer code: ' + e.message); return; }
+
+    const btn = document.getElementById('btn-connect');
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+    setError('');
+
+    // Use ICE servers embedded in the offer by the sharer
+    const iceServers = parsed.iceServers ?? [{ urls: STUN }];
+    const iceConfig  = { iceServers };
+
+    const pc = new RTCPeerConnection(iceConfig);
+
+    // Show video as soon as tracks arrive
+    pc.ontrack = e => {
+      const video = document.getElementById('stream-video');
+      if (!video.srcObject) {
+        video.srcObject = e.streams[0] ?? new MediaStream([e.track]);
+        document.getElementById('video-wrap').style.display = 'block';
+      } else {
+        e.streams[0]?.getTracks().forEach(t => video.srcObject.addTrack(t));
+      }
+    };
+
+    try {
+      const offer = { type: parsed.type, sdp: parsed.sdp };
+      await pc.setRemoteDescription(offer);
+      await pc.setLocalDescription(await pc.createAnswer());
+
+      // 2 second cap — relay candidates gather fast, TCP candidates can take 30s+
+      await Promise.race([
+        new Promise(res => {
+          if (pc.iceGatheringState === 'complete') return res();
+          pc.addEventListener('icegatheringstatechange', function h() {
+            if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', h); res(); }
+          });
+        }),
+        new Promise(res => setTimeout(res, 2000))
+      ]);
+
+      const answerCode = btoa(JSON.stringify(pc.localDescription.toJSON()));
+      document.getElementById('answer-out').value = answerCode;
+      document.getElementById('answer-section').style.display = '';
+      document.getElementById('connect-card').style.display = 'none';
+
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Connect';
+      setError('Connection failed: ' + e.message);
+    }
+  });
+
+  document.getElementById('btn-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(document.getElementById('answer-out').value).then(() => {
+      document.getElementById('btn-copy').textContent = 'Copied!';
+      setTimeout(() => { document.getElementById('btn-copy').textContent = 'Copy code'; }, 1500);
+    });
+  });
+</script>
+</body>
+</html>
