@@ -2,11 +2,13 @@
 
 const isTopFrame = window === window.top;
 
-// ── Sharing state (top frame) ──────────────────────────────────────────────
+// ── Per-tab state ──────────────────────────────────────────────────────────
 
-let sharerPc             = null;
-let drawLoopId           = null;
-let pendingStreamResolve = null;
+let drawLoopId         = null;
+let contentLoopPc      = null;   // loopback PC to background
+let pendingStreamResolve = null; // used for iframe→top relay
+let iframeRelayPc      = null;   // top-frame side of iframe→top relay (kept alive)
+let iframeLoopPc       = null;   // iframe side of loopback to top frame (kept alive)
 
 // ── Video finder ───────────────────────────────────────────────────────────
 
@@ -58,6 +60,8 @@ async function waitForGathering(pc, timeoutMs) {
 // ── Stream capture ─────────────────────────────────────────────────────────
 
 function captureLocalStream(video) {
+  if (drawLoopId !== null) { cancelAnimationFrame(drawLoopId); drawLoopId = null; }
+
   const canvas = document.createElement('canvas');
   canvas.width  = video.videoWidth  || 1280;
   canvas.height = video.videoHeight || 720;
@@ -78,25 +82,11 @@ function captureLocalStream(video) {
     const src = ac.createMediaElementSource(video);
     const dst = ac.createMediaStreamDestination();
     src.connect(dst);
-    src.connect(ac.destination); // preserve local playback
+    src.connect(ac.destination); // preserve local audio
     dst.stream.getAudioTracks().forEach(t => stream.addTrack(t));
   } catch (_) {}
 
   return stream;
-}
-
-async function buildOutboundPc(stream, iceConfig) {
-  sharerPc = new RTCPeerConnection(iceConfig);
-  stream.getTracks().forEach(t => sharerPc.addTrack(t, stream));
-
-  await sharerPc.setLocalDescription(await sharerPc.createOffer());
-  await waitForGathering(sharerPc, 2000);
-
-  // Embed iceServers so the viewer page can use them without manual entry
-  return btoa(JSON.stringify({
-    ...sharerPc.localDescription.toJSON(),
-    iceServers: iceConfig.iceServers
-  }));
 }
 
 // ── Iframe: postMessage listener ───────────────────────────────────────────
@@ -122,27 +112,38 @@ if (!isTopFrame) {
       }
     }
 
+    if (msg.type === 'STREAM_ANSWER') {
+      // Forward down to nested iframes so deeply nested video frames get it
+      document.querySelectorAll('iframe').forEach(iframe => {
+        try { iframe.contentWindow.postMessage(msg, '*'); } catch (_) {}
+      });
+    }
+
     if (msg.type === 'START_STREAM') {
       const video = findVideo();
-      if (!video) return;
+      if (!video) {
+        broadcastToIframes('START_STREAM'); // recurse into nested iframes
+        return;
+      }
 
       const stream = captureLocalStream(video);
-      const loopPc = new RTCPeerConnection({ iceServers: [] });
-      stream.getTracks().forEach(t => loopPc.addTrack(t, stream));
+      if (iframeLoopPc) { iframeLoopPc.close(); iframeLoopPc = null; }
+      iframeLoopPc = new RTCPeerConnection({ iceServers: [] });
+      stream.getTracks().forEach(t => iframeLoopPc.addTrack(t, stream));
 
-      await loopPc.setLocalDescription(await loopPc.createOffer());
-      await waitForGathering(loopPc, 500); // host candidates only, very fast
+      await iframeLoopPc.setLocalDescription(await iframeLoopPc.createOffer());
+      await waitForGathering(iframeLoopPc, 500);
 
       window.top.postMessage({
         __streamshare: true,
         type: 'STREAM_OFFER',
-        offer: loopPc.localDescription.toJSON()
+        offer: iframeLoopPc.localDescription.toJSON()
       }, '*');
 
       window.addEventListener('message', async function answerHandler(ev) {
         if (!ev.data?.__streamshare || ev.data.type !== 'STREAM_ANSWER') return;
         window.removeEventListener('message', answerHandler);
-        await loopPc.setRemoteDescription(ev.data.answer);
+        await iframeLoopPc.setRemoteDescription(ev.data.answer);
       });
     }
   });
@@ -158,29 +159,28 @@ if (isTopFrame) {
     const resolve = pendingStreamResolve;
     pendingStreamResolve = null;
 
-    const relayPc = new RTCPeerConnection({ iceServers: [] });
+    if (iframeRelayPc) { iframeRelayPc.close(); iframeRelayPc = null; }
+    iframeRelayPc = new RTCPeerConnection({ iceServers: [] });
     const tracks  = [];
-    relayPc.ontrack = ev => (ev.streams[0]?.getTracks() ?? [ev.track]).forEach(t => tracks.push(t));
+    iframeRelayPc.ontrack = ev => (ev.streams[0]?.getTracks() ?? [ev.track]).forEach(t => tracks.push(t));
 
-    await relayPc.setRemoteDescription(e.data.offer);
-    const answer = await relayPc.createAnswer();
-    await relayPc.setLocalDescription(answer);
+    await iframeRelayPc.setRemoteDescription(e.data.offer);
+    await iframeRelayPc.setLocalDescription(await iframeRelayPc.createAnswer());
+    await waitForGathering(iframeRelayPc, 500);
 
-    // Send answer back to all iframes (only the right one will use it)
     document.querySelectorAll('iframe').forEach(fr => {
       try {
         fr.contentWindow.postMessage({
           __streamshare: true,
           type: 'STREAM_ANSWER',
-          answer: relayPc.localDescription.toJSON()
+          answer: iframeRelayPc.localDescription.toJSON()
         }, '*');
       } catch (_) {}
     });
 
-    // Wait for tracks to arrive
     await new Promise(res => {
       if (tracks.length) return res();
-      relayPc.addEventListener('track', () => { if (tracks.length) res(); });
+      iframeRelayPc.addEventListener('track', () => { if (tracks.length) res(); });
       setTimeout(res, 3000);
     });
 
@@ -193,6 +193,7 @@ if (isTopFrame) {
 if (isTopFrame) {
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
+    // ── Frame preview (popup) ───────────────────────────────────────────────
     if (msg.type === 'CAPTURE_FRAME') {
       const video = findVideo();
       if (video) {
@@ -225,16 +226,16 @@ if (isTopFrame) {
       return true;
     }
 
-    if (msg.type === 'START_SHARE') {
+    // ── Capture stream and deliver to background via loopback PC ────────────
+    if (msg.type === 'GET_STREAM') {
       (async () => {
         try {
-          const video = findVideo();
           let stream;
+          const video = findVideo();
 
           if (video) {
             stream = captureLocalStream(video);
           } else {
-            // Video is in a cross-origin iframe — relay via loopback RTCPeerConnection
             stream = await new Promise((resolve, reject) => {
               pendingStreamResolve = resolve;
               broadcastToIframes('START_STREAM');
@@ -247,8 +248,13 @@ if (isTopFrame) {
             });
           }
 
-          const offer = await buildOutboundPc(stream, msg.iceConfig);
-          sendResponse({ ok: true, offer });
+          if (contentLoopPc) { contentLoopPc.close(); contentLoopPc = null; }
+          contentLoopPc = new RTCPeerConnection({ iceServers: [] });
+          stream.getTracks().forEach(t => contentLoopPc.addTrack(t, stream));
+          await contentLoopPc.setLocalDescription(await contentLoopPc.createOffer());
+          await waitForGathering(contentLoopPc, 500);
+
+          sendResponse({ ok: true, offer: contentLoopPc.localDescription.toJSON() });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -256,26 +262,20 @@ if (isTopFrame) {
       return true;
     }
 
-    if (msg.type === 'APPLY_ANSWER') {
-      if (!sharerPc) { sendResponse({ ok: false, error: 'No active share' }); return; }
-      sharerPc.setRemoteDescription(JSON.parse(atob(msg.answer)))
-        .then(() => sendResponse({ ok: true }))
-        .catch(e => sendResponse({ ok: false, error: e.message }));
-      return true;
-    }
-
-    if (msg.type === 'STOP_SHARE') {
-      if (sharerPc)       { sharerPc.close(); sharerPc = null; }
-      if (drawLoopId !== null) { cancelAnimationFrame(drawLoopId); drawLoopId = null; }
+    // ── Background delivers loopback answer ─────────────────────────────────
+    if (msg.type === 'STREAM_ANSWER') {
+      if (contentLoopPc) {
+        contentLoopPc.setRemoteDescription(msg.answer).catch(() => {});
+      }
       sendResponse({ ok: true });
     }
 
-    if (msg.type === 'GET_SHARE_STATE') {
-      const state = sharerPc?.connectionState ?? 'none';
-      sendResponse({
-        active: !!sharerPc && !['closed', 'failed'].includes(state),
-        state
-      });
+    // ── Stop capture (switching to a different tab) ──────────────────────────
+    if (msg.type === 'STOP_CAPTURE') {
+      if (drawLoopId !== null) { cancelAnimationFrame(drawLoopId); drawLoopId = null; }
+      if (contentLoopPc)  { contentLoopPc.close();  contentLoopPc = null; }
+      if (iframeRelayPc)  { iframeRelayPc.close();  iframeRelayPc = null; }
+      sendResponse({ ok: true });
     }
 
   });

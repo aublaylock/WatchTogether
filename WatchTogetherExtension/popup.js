@@ -1,21 +1,18 @@
 const STUN = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
 
-// ── Persist credentials across popup opens ─────────────────────────────────
-
 const $ = id => document.getElementById(id);
+
+// ── Persist TURN credentials ───────────────────────────────────────────────
 
 $('turn-url').value  = localStorage.getItem('ss-turn-url')  || '';
 $('turn-user').value = localStorage.getItem('ss-turn-user') || '';
 $('turn-pass').value = localStorage.getItem('ss-turn-pass') || '';
 
-function saveCredentials() {
-  localStorage.setItem('ss-turn-url',  $('turn-url').value.trim());
-  localStorage.setItem('ss-turn-user', $('turn-user').value.trim());
-  localStorage.setItem('ss-turn-pass', $('turn-pass').value.trim());
-}
+['turn-url', 'turn-user', 'turn-pass'].forEach(id => {
+  $(id).addEventListener('input', () => localStorage.setItem('ss-' + id, $(id).value.trim()));
+});
 
 function getIceConfig() {
-  saveCredentials();
   const url  = $('turn-url').value.trim();
   const user = $('turn-user').value.trim();
   const pass = $('turn-pass').value.trim();
@@ -38,20 +35,41 @@ function setError(msg) {
   $('error-msg').classList.toggle('visible', !!msg);
 }
 
-// ── Restore state on popup open ────────────────────────────────────────────
+// ── Restore state from background on popup open ────────────────────────────
 
-chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-  chrome.tabs.sendMessage(tab.id, { type: 'GET_SHARE_STATE' }, resp => {
-    if (chrome.runtime.lastError || !resp) return; // page not injectable
-    if (resp.active) {
-      const savedOffer = localStorage.getItem('ss-offer');
-      if (savedOffer) {
-        $('offer-out').value = savedOffer;
-        showScreen('handshake');
+chrome.runtime.sendMessage({ type: 'GET_STATE' }, state => {
+  if (state?.screen === 'handshake') {
+    $('offer-out').value = state.offer || '';
+    showScreen('handshake');
+  } else if (state?.screen === 'connected') {
+    showScreen('connected');
+  }
+  // else: default idle screen is already shown
+});
+
+// ── Preview video ──────────────────────────────────────────────────────────
+
+$('btn-preview').addEventListener('click', () => {
+  const btn = $('btn-preview');
+  btn.disabled = true;
+  btn.textContent = 'Capturing…';
+  $('preview-wrap').style.display = 'none';
+  setError('');
+
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_FRAME' }, resp => {
+      btn.disabled = false;
+      btn.textContent = 'Preview video';
+
+      if (chrome.runtime.lastError) { setError('Could not reach page. Try refreshing.'); return; }
+      if (!resp?.ok)                 { setError(resp?.error || 'No video found.');        return; }
+      if (resp.dataUrl) {
+        $('preview-img').src = resp.dataUrl;
+        $('preview-wrap').style.display = 'block';
       } else {
-        showScreen('connected');
+        setError('Video found but frame blocked (cross-origin canvas taint).');
       }
-    }
+    });
   });
 });
 
@@ -63,26 +81,20 @@ $('btn-start').addEventListener('click', () => {
   btn.textContent = 'Starting…';
   setError('');
 
-  const iceConfig = getIceConfig();
-
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.tabs.sendMessage(tab.id, { type: 'START_SHARE', iceConfig }, resp => {
-      btn.disabled = false;
-      btn.textContent = 'Start Sharing';
+    chrome.runtime.sendMessage(
+      { type: 'START_SHARE', tabId: tab.id, iceConfig: getIceConfig() },
+      resp => {
+        btn.disabled = false;
+        btn.textContent = 'Start Sharing';
 
-      if (chrome.runtime.lastError) {
-        setError('Could not reach page. Try refreshing.');
-        return;
-      }
-      if (!resp?.ok) {
-        setError(resp?.error || 'Failed to start sharing.');
-        return;
-      }
+        if (chrome.runtime.lastError) { setError('Background error: ' + chrome.runtime.lastError.message); return; }
+        if (!resp?.ok) { setError(resp?.error || 'Failed to start sharing.'); return; }
 
-      localStorage.setItem('ss-offer', resp.offer);
-      $('offer-out').value = resp.offer;
-      showScreen('handshake');
-    });
+        $('offer-out').value = resp.offer;
+        showScreen('handshake');
+      }
+    );
   });
 });
 
@@ -106,18 +118,34 @@ $('btn-apply').addEventListener('click', () => {
   btn.textContent = 'Connecting…';
   setError('');
 
+  chrome.runtime.sendMessage({ type: 'APPLY_ANSWER', answer }, resp => {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+
+    if (chrome.runtime.lastError || !resp?.ok) {
+      setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to apply answer.');
+      return;
+    }
+    showScreen('connected');
+  });
+});
+
+// ── Recapture ──────────────────────────────────────────────────────────────
+
+$('btn-recapture').addEventListener('click', () => {
+  const btn = $('btn-recapture');
+  btn.disabled = true;
+  btn.textContent = 'Capturing…';
+  setError('');
+
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.tabs.sendMessage(tab.id, { type: 'APPLY_ANSWER', answer }, resp => {
+    chrome.runtime.sendMessage({ type: 'RECAPTURE', tabId: tab.id }, resp => {
       btn.disabled = false;
-      btn.textContent = 'Connect';
+      btn.textContent = 'Recapture video';
 
       if (chrome.runtime.lastError || !resp?.ok) {
-        setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to apply answer.');
-        return;
+        setError(chrome.runtime.lastError?.message || resp?.error || 'Recapture failed.');
       }
-
-      localStorage.removeItem('ss-offer');
-      showScreen('connected');
     });
   });
 });
@@ -125,10 +153,7 @@ $('btn-apply').addEventListener('click', () => {
 // ── Stop sharing ───────────────────────────────────────────────────────────
 
 $('btn-stop').addEventListener('click', () => {
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.tabs.sendMessage(tab.id, { type: 'STOP_SHARE' }, () => {
-      localStorage.removeItem('ss-offer');
-      showScreen('idle');
-    });
+  chrome.runtime.sendMessage({ type: 'STOP_SHARE' }, () => {
+    showScreen('idle');
   });
 });

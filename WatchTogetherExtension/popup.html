@@ -121,6 +121,9 @@
   .connected-badge .dot { color: var(--green); font-size: 18px; }
   .connected-badge .title { font-weight: 600; font-size: 14px; margin: 4px 0 2px; }
   .connected-badge .sub { color: var(--muted); font-size: 12px; }
+
+  .preview-wrap { display: none; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); background: #000; line-height: 0; margin-top: 6px; }
+  .preview-wrap img { width: 100%; display: block; }
 </style>
 </head>
 <body>
@@ -151,7 +154,11 @@
       <input id="turn-pass" type="password" placeholder="••••••••">
     </div>
   </div>
+  <button id="btn-preview" class="secondary">Preview video</button>
   <button id="btn-start">Start Sharing</button>
+  <div class="preview-wrap" id="preview-wrap">
+    <img id="preview-img" alt="video preview"/>
+  </div>
 </div>
 
 <!-- ── Screen: handshake ── -->
@@ -178,6 +185,7 @@
     <div class="title">Live</div>
     <div class="sub">Your friend is watching</div>
   </div>
+  <button id="btn-recapture" class="secondary">Recapture video</button>
   <button id="btn-stop" class="danger">Stop Sharing</button>
 </div>
 
