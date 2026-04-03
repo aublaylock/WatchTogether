@@ -176,6 +176,53 @@
 <script>
   const STUN = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
 
+  async function compress(str) {
+    const bytes = new TextEncoder().encode(str);
+    const cs = new CompressionStream('deflate-raw');
+    const writer = cs.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    let bin = '';
+    for (let i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
+    return btoa(bin);
+  }
+
+  async function decompress(b64) {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const ds = new DecompressionStream('deflate-raw');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const chunks = [];
+    const reader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return new TextDecoder().decode(out);
+  }
+
+  function relayOnlySdp(desc) {
+    const sdp = desc.sdp.split('\n').filter(line =>
+      !line.startsWith('a=candidate:') || line.includes('typ relay')
+    ).join('\n');
+    return { ...desc, sdp };
+  }
+
   function setError(msg) {
     const el = document.getElementById('error-msg');
     el.textContent = msg;
@@ -187,7 +234,7 @@
     if (!raw) { setError('Paste an offer code first.'); return; }
 
     let parsed;
-    try { parsed = JSON.parse(atob(raw)); }
+    try { parsed = JSON.parse(await decompress(raw)); }
     catch (e) { setError('Invalid offer code: ' + e.message); return; }
 
     const btn = document.getElementById('btn-connect');
@@ -231,7 +278,7 @@
         new Promise(res => setTimeout(res, 2000))
       ]);
 
-      const answerCode = btoa(JSON.stringify(pc.localDescription.toJSON()));
+      const answerCode = await compress(JSON.stringify(relayOnlySdp(pc.localDescription.toJSON())));
       document.getElementById('answer-out').value = answerCode;
       document.getElementById('answer-section').style.display = 'flex';
       document.getElementById('connect-card').style.display = 'none';

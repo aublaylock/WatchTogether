@@ -1,5 +1,55 @@
 // background.js — holds WebRTC state across popup opens and tab switches
 
+// ── Codec helpers ──────────────────────────────────────────────────────────
+
+async function compress(str) {
+  const bytes = new TextEncoder().encode(str);
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  let bin = '';
+  for (let i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
+  return btoa(bin);
+}
+
+async function decompress(b64) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  const reader = ds.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return new TextDecoder().decode(out);
+}
+
+// Strip non-relay candidates so encoded codes are shorter
+function relayOnlySdp(desc) {
+  const sdp = desc.sdp.split('\n').filter(line =>
+    !line.startsWith('a=candidate:') || line.includes('typ relay')
+  ).join('\n');
+  return { ...desc, sdp };
+}
+
 let sharerPc     = null;
 let loopPc       = null;   // background side of the loopback to the capture tab
 let captureTabId = null;   // which tab is currently providing the stream
@@ -85,10 +135,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await sharerPc.setLocalDescription(await sharerPc.createOffer());
         await waitForGathering(sharerPc, 2000);
 
-        const offer = btoa(JSON.stringify({
+        const offer = await compress(JSON.stringify(relayOnlySdp({
           ...sharerPc.localDescription.toJSON(),
           iceServers: msg.iceConfig.iceServers,
-        }));
+        })));
         state = { screen: 'handshake', offer };
         sendResponse({ ok: true, offer });
       } catch (err) {
@@ -100,9 +150,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'APPLY_ANSWER') {
     if (!sharerPc) { sendResponse({ ok: false, error: 'No active share' }); return; }
-    sharerPc.setRemoteDescription(JSON.parse(atob(msg.answer)))
-      .then(() => { state.screen = 'connected'; sendResponse({ ok: true }); })
-      .catch(e => sendResponse({ ok: false, error: e.message }));
+    (async () => {
+      try {
+        const desc = JSON.parse(await decompress(msg.answer));
+        await sharerPc.setRemoteDescription(desc);
+        state.screen = 'connected';
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
     return true;
   }
 
