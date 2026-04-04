@@ -40,9 +40,19 @@ let syncListeners = null;
 
 function attachSyncListeners(video) {
   if (syncListeners) detachSyncListeners();
-  const onPlay   = () => chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'play',  currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
-  const onPause  = () => chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'pause', currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
-  const onSeeked = () => chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'seek',  currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
+  console.log('[SS content] attachSyncListeners on video, src:', video.currentSrc?.slice(0, 80), 'frame:', location.href.slice(0, 80));
+  const onPlay   = () => {
+    console.log('[SS content] video play, currentTime:', video.currentTime);
+    chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'play',  currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
+  };
+  const onPause  = () => {
+    console.log('[SS content] video pause, currentTime:', video.currentTime);
+    chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'pause', currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
+  };
+  const onSeeked = () => {
+    console.log('[SS content] video seeked, currentTime:', video.currentTime);
+    chrome.runtime.sendMessage({ type: 'SYNC_EVENT', event: { type: 'seek',  currentTime: video.currentTime } }, () => { void chrome.runtime.lastError; });
+  };
   video.addEventListener('play',   onPlay);
   video.addEventListener('pause',  onPause);
   video.addEventListener('seeked', onSeeked);
@@ -61,13 +71,14 @@ function detachSyncListeners() {
 // ── Apply sync event (viewer side) ────────────────────────────────────────
 
 function applySyncEvent(video, event) {
+  console.log('[SS content] applySyncEvent:', event, 'frame:', location.href.slice(0, 80));
   if (event.type === 'seek' || event.type === 'play' || event.type === 'pause' || event.type === 'init') {
     video.currentTime = event.currentTime;
   }
-  if (event.type === 'play')  video.play().catch(() => {});
+  if (event.type === 'play')  video.play().catch(e => console.warn('[SS content] play() rejected:', e));
   if (event.type === 'pause') video.pause();
   if (event.type === 'init') {
-    if (!event.paused) video.play().catch(() => {});
+    if (!event.paused) video.play().catch(e => console.warn('[SS content] init play() rejected:', e));
     else video.pause();
   }
 }
@@ -90,6 +101,7 @@ if (!isTopFrame) {
 
     if (msg.type === 'START_SYNC') {
       const video = findVideo();
+      console.log('[SS content iframe] START_SYNC received, video found:', !!video, 'frame:', location.href.slice(0, 80));
       if (video) {
         attachSyncListeners(video);
       } else {
@@ -146,9 +158,11 @@ if (isTopFrame) {
     // ── Start sync listeners on the video (sharer side) ────────────────────
     if (msg.type === 'START_SYNC') {
       const video = findVideo();
+      console.log('[SS content] START_SYNC received, video found:', !!video, 'frame:', location.href.slice(0, 80));
       if (video) {
         attachSyncListeners(video);
       } else {
+        console.log('[SS content] No video in top frame — broadcasting to iframes');
         broadcastToIframes({ type: 'START_SYNC' });
       }
       sendResponse({ ok: true });
@@ -166,9 +180,11 @@ if (isTopFrame) {
     // ── Apply a sync event to the video (viewer side) ──────────────────────
     if (msg.type === 'APPLY_SYNC') {
       const video = findVideo();
+      console.log('[SS content] APPLY_SYNC received:', msg.event, '| video found:', !!video);
       if (video) {
         applySyncEvent(video, msg.event);
       } else {
+        console.log('[SS content] No video in top frame — broadcasting to iframes');
         broadcastToIframes({ type: 'APPLY_SYNC', event: msg.event });
       }
       sendResponse({ ok: true });

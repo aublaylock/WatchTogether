@@ -82,12 +82,18 @@ function getVideoInfoFromTab(tabId) {
 }
 
 function setupViewerChannel() {
+  console.log('[SS viewer] DataChannel received, readyState:', dataChannel.readyState);
+  dataChannel.onopen  = () => console.log('[SS viewer] DataChannel opened');
+  dataChannel.onclose = () => console.log('[SS viewer] DataChannel closed');
+  dataChannel.onerror = e => console.log('[SS viewer] DataChannel error', e);
   dataChannel.onmessage = e => {
     let event;
     try { event = JSON.parse(e.data); } catch (_) { return; }
-    if (!viewerTabId) return;
-    chrome.tabs.sendMessage(viewerTabId, { type: 'APPLY_SYNC', event }, () => {
-      void chrome.runtime.lastError;
+    console.log('[SS viewer] DataChannel message received:', event, '→ sending to tab', viewerTabId);
+    if (!viewerTabId) { console.warn('[SS viewer] No viewerTabId set — dropping event'); return; }
+    chrome.tabs.sendMessage(viewerTabId, { type: 'APPLY_SYNC', event }, r => {
+      if (chrome.runtime.lastError) console.warn('[SS viewer] APPLY_SYNC send failed:', chrome.runtime.lastError.message);
+      else console.log('[SS viewer] APPLY_SYNC sent to tab, response:', r);
     });
   };
 }
@@ -111,11 +117,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'START_SHARE') {
     (async () => {
       try {
+        console.log('[SS sharer] START_SHARE tabId:', msg.tabId);
         const videoInfo = await getVideoInfoFromTab(msg.tabId);
+        console.log('[SS sharer] GET_VIDEO_INFO result:', videoInfo);
 
         sharerPc = new RTCPeerConnection(msg.iceConfig);
         dataChannel = sharerPc.createDataChannel('sync');
         syncMode = 'sharer';
+        console.log('[SS sharer] PC + DataChannel created');
 
         await sharerPc.setLocalDescription(await sharerPc.createOffer());
         await waitForGathering(sharerPc, 2000);
@@ -147,11 +156,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         // When DataChannel opens, send the current video state as init event
         dataChannel.onopen = async () => {
+          console.log('[SS sharer] DataChannel opened, sharerTabId:', msg.sharerTabId);
           const info = await getVideoInfoFromTab(msg.sharerTabId);
+          console.log('[SS sharer] Sending init event:', info);
           dataChannel.send(JSON.stringify({ type: 'init', currentTime: info.currentTime, paused: info.paused }));
           // Also start listening for sync events from content.js
-          chrome.tabs.sendMessage(msg.sharerTabId, { type: 'START_SYNC' }, () => { void chrome.runtime.lastError; });
+          chrome.tabs.sendMessage(msg.sharerTabId, { type: 'START_SYNC' }, r => {
+            if (chrome.runtime.lastError) console.warn('[SS sharer] START_SYNC failed:', chrome.runtime.lastError.message);
+            else console.log('[SS sharer] START_SYNC response:', r);
+          });
         };
+        dataChannel.onclose = () => console.log('[SS sharer] DataChannel closed');
+        dataChannel.onerror = e => console.log('[SS sharer] DataChannel error', e);
 
         state.screen = 'connected';
         sendResponse({ ok: true });
@@ -167,14 +183,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
         const parsed = JSON.parse(await decompress(msg.offer));
+        console.log('[SS viewer] JOIN_SESSION parsed offer, syncUrl:', parsed.syncUrl, 'iceServers:', parsed.iceServers?.length);
 
         sharerPc = new RTCPeerConnection({ iceServers: parsed.iceServers || [] });
         syncMode = 'viewer';
 
         sharerPc.ondatachannel = e => {
+          console.log('[SS viewer] ondatachannel fired');
           dataChannel = e.channel;
           setupViewerChannel();
         };
+        sharerPc.oniceconnectionstatechange = () => console.log('[SS viewer] ICE state:', sharerPc.iceConnectionState);
 
         await sharerPc.setRemoteDescription({ type: parsed.type, sdp: parsed.sdp });
         await sharerPc.setLocalDescription(await sharerPc.createAnswer());
@@ -207,8 +226,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   // ── Sharer: forward sync event from content.js to DataChannel ─────────────
   if (msg.type === 'SYNC_EVENT') {
+    console.log('[SS sharer] SYNC_EVENT received:', msg.event, '| DC state:', dataChannel?.readyState, '| syncMode:', syncMode);
     if (syncMode === 'sharer' && dataChannel?.readyState === 'open') {
       dataChannel.send(JSON.stringify(msg.event));
+      console.log('[SS sharer] Event forwarded to DataChannel');
+    } else {
+      console.warn('[SS sharer] Event dropped — DC not ready or wrong mode');
     }
     sendResponse({ ok: true });
     return;
