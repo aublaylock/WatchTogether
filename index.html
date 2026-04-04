@@ -115,12 +115,70 @@
       overflow: hidden;
       display: none;
       aspect-ratio: 16/9;
+      position: relative;
     }
 
     #stream-video {
       width: 100%; height: 100%;
       display: block;
     }
+
+    /* ── Video controls ──────────────────────────────────────────────────── */
+
+    #video-controls {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.7));
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #video-wrap:hover #video-controls,
+    #video-wrap:fullscreen #video-controls { opacity: 1; }
+    #video-wrap:-webkit-full-screen #video-controls { opacity: 1; }
+
+    #volume-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255,255,255,0.3);
+      outline: none;
+      cursor: pointer;
+    }
+    #volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    #volume-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      border: none;
+    }
+
+    #btn-fullscreen {
+      width: auto;
+      padding: 4px 6px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: #fff;
+      opacity: 0.8;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    #btn-fullscreen:hover { opacity: 1; }
+    #btn-fullscreen svg { display: block; }
 
     /* ── Answer section ──────────────────────────────────────────────────── */
 
@@ -144,6 +202,17 @@
 <!-- Video (shown once stream arrives) -->
 <div id="video-wrap">
   <video id="stream-video" autoplay playsinline></video>
+  <div id="video-controls">
+    <input id="volume-slider" type="range" min="0" max="1" step="0.02" value="1" title="Volume">
+    <button id="btn-fullscreen" title="Fullscreen">
+      <svg id="icon-expand" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M2 6V2h4M12 2h4v4M16 12v4h-4M6 16H2v-4" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg id="icon-shrink" width="18" height="18" viewBox="0 0 18 18" fill="none" style="display:none">
+        <path d="M6 2v4H2M16 6h-4V2M12 16v-4h4M2 12h4v4" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
 </div>
 
 <!-- Connect card -->
@@ -305,6 +374,27 @@
       document.getElementById('btn-copy').textContent = 'Copied!';
       setTimeout(() => { document.getElementById('btn-copy').textContent = 'Copy code'; }, 1500);
     });
+  });
+
+  // ── Volume slider ──────────────────────────────────────────────────────────
+  document.getElementById('volume-slider').addEventListener('input', e => {
+    document.getElementById('stream-video').volume = e.target.value;
+  });
+
+  // ── Fullscreen ─────────────────────────────────────────────────────────────
+  document.getElementById('btn-fullscreen').addEventListener('click', () => {
+    const wrap = document.getElementById('video-wrap');
+    if (!document.fullscreenElement) {
+      wrap.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  document.addEventListener('fullscreenchange', () => {
+    const inFs = !!document.fullscreenElement;
+    document.getElementById('icon-expand').style.display = inFs ? 'none' : '';
+    document.getElementById('icon-shrink').style.display = inFs ? '' : 'none';
   });
 </script>
 </body>
