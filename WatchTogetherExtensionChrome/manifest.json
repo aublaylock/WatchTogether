@@ -1,15 +1,14 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "StreamShare",
   "version": "1.3",
   "background": {
-    "scripts": ["background.js"],
-    "persistent": true
+    "service_worker": "background.js"
   },
   "description": "Share your video stream with a friend in real time",
   "icons": { "48": "icons/Happy.svg" },
   "permissions": ["activeTab", "tabs"],
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/Happy.svg",
