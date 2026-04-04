@@ -209,7 +209,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         await sharerPc.setRemoteDescription({ type: parsed.type, sdp: parsed.sdp });
         await sharerPc.setLocalDescription(await sharerPc.createAnswer());
-        await waitForGathering(sharerPc, 2000);
+        await waitForGathering(sharerPc, 6000);
+
+        const answerCandidateTypes = sharerPc.localDescription.sdp
+          .split('\n').filter(l => l.startsWith('a=candidate:'))
+          .map(l => (l.match(/typ (\w+)/) || [])[1]);
+        console.log('[SS viewer] Answer candidate types:', answerCandidateTypes);
 
         const answer = await compress(JSON.stringify(sharerPc.localDescription.toJSON()));
 
