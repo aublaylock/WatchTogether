@@ -214,6 +214,52 @@
     #btn-recover.spinning svg { animation: spin 0.6s linear; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
+    /* ── Debug log ───────────────────────────────────────────────────────── */
+
+    #debug-panel {
+      width: 100%;
+      max-width: 900px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #debug-panel.visible { display: flex; }
+
+    #debug-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #debug-header button {
+      width: auto;
+      padding: 3px 10px;
+      font-size: 11px;
+      background: var(--surface);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+    }
+
+    #debug-log {
+      background: #0a0a0c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      height: 180px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      color: #a1a1aa;
+    }
+    #debug-log .ts  { color: #52525b; }
+    #debug-log .ok  { color: #6fdf6f; }
+    #debug-log .warn { color: #facc15; }
+    #debug-log .err  { color: #ff5d5d; }
+    #debug-log .stat { color: #7dd3fc; }
+
     /* ── Answer section ──────────────────────────────────────────────────── */
 
     #answer-section { display: none; }
@@ -266,6 +312,15 @@
       </svg>
     </button>
   </div>
+</div>
+
+<!-- Debug log -->
+<div id="debug-panel">
+  <div id="debug-header">
+    <span>Debug log</span>
+    <button id="btn-clear-log">Clear</button>
+  </div>
+  <div id="debug-log"></div>
 </div>
 
 <!-- Connect card -->
@@ -349,6 +404,58 @@
 
   let pc;  // module-scope so GC doesn't collect it after answer is generated
 
+  // ── Debug log ──────────────────────────────────────────────────────────────
+  let statsInterval = null;
+  let lastVideoBytes = 0, lastAudioBytes = 0, lastStatsTime = 0;
+
+  function log(msg, cls) {
+    const el = document.getElementById('debug-log');
+    const ts = new Date().toISOString().slice(11, 23);
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="ts">[${ts}]</span> ${cls ? `<span class="${cls}">${msg}</span>` : msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  document.getElementById('btn-clear-log').addEventListener('click', () => {
+    document.getElementById('debug-log').innerHTML = '';
+  });
+
+  function startStats() {
+    if (statsInterval) clearInterval(statsInterval);
+    lastVideoBytes = 0; lastAudioBytes = 0; lastStatsTime = 0;
+    statsInterval = setInterval(async () => {
+      if (!pc) return;
+      const now = Date.now();
+      const reports = await pc.getStats();
+      let v = {}, a = {};
+      reports.forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') v = r;
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') a = r;
+      });
+
+      const dt = lastStatsTime ? (now - lastStatsTime) / 1000 : 1;
+      const vKbps = lastVideoBytes ? (((v.bytesReceived ?? 0) - lastVideoBytes) * 8 / dt / 1000).toFixed(0) : '—';
+      const aKbps = lastAudioBytes ? (((a.bytesReceived ?? 0) - lastAudioBytes) * 8 / dt / 1000).toFixed(0) : '—';
+
+      const parts = [
+        `video ${vKbps} kbps`,
+        `frames decoded=${v.framesDecoded ?? '—'} dropped=${v.framesDropped ?? '—'} frozen=${v.totalFreezesDuration?.toFixed(1) ?? '—'}s`,
+        `pkt lost=${v.packetsLost ?? '—'} jitter=${v.jitter != null ? (v.jitter * 1000).toFixed(1) : '—'}ms`,
+        `audio ${aKbps} kbps lost=${a.packetsLost ?? '—'} jitter=${a.jitter != null ? (a.jitter * 1000).toFixed(1) : '—'}ms concealed=${a.concealedSamples ?? '—'}`,
+      ];
+      log(parts.join(' | '), 'stat');
+
+      lastVideoBytes = v.bytesReceived ?? lastVideoBytes;
+      lastAudioBytes = a.bytesReceived ?? lastAudioBytes;
+      lastStatsTime  = now;
+    }, 3000);
+  }
+
+  function stopStats() {
+    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  }
+
   function setError(msg) {
     const el = document.getElementById('error-msg');
     el.textContent = msg;
@@ -377,15 +484,45 @@
     const iceServers = parsed.iceServers ?? [{ urls: STUN }];
     const iceConfig  = { iceServers };
 
+    stopStats();
     if (pc) pc.close();
     pc = new RTCPeerConnection(iceConfig);
+
+    document.getElementById('debug-panel').classList.add('visible');
+    log(`connecting — ICE: ${JSON.stringify(iceConfig.iceServers.map(s => s.urls))}`);
+
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      log(`ICE → ${s}`, s === 'connected' || s === 'completed' ? 'ok' : s === 'failed' || s === 'disconnected' ? 'err' : 'warn');
+      if (s === 'connected' || s === 'completed') startStats();
+      if (s === 'failed' || s === 'disconnected')  stopStats();
+    };
+    pc.onconnectionstatechange = () => {
+      const s = pc.connectionState;
+      log(`connection → ${s}`, s === 'connected' ? 'ok' : s === 'failed' || s === 'closed' ? 'err' : 'warn');
+    };
 
     // Attach tracks when they arrive, but only reveal the video once it's actually playing
     pc.ontrack = e => {
       const video = document.getElementById('stream-video');
+      log(`track arrived: ${e.track.kind} id=${e.track.id.slice(0,8)} state=${e.track.readyState}`, 'ok');
+
+      e.track.onmute   = () => log(`track muted: ${e.track.kind}`, 'warn');
+      e.track.onunmute = () => log(`track unmuted: ${e.track.kind}`, 'ok');
+      e.track.onended  = () => log(`track ended: ${e.track.kind}`, 'err');
+
       if (!video.srcObject) {
         video.srcObject = e.streams[0] ?? new MediaStream([e.track]);
+
+        video.onplaying  = () => log('video playing', 'ok');
+        video.onstalled  = () => log('video stalled', 'warn');
+        video.onwaiting  = () => log('video waiting', 'warn');
+        video.onsuspend  = () => log('video suspend', 'warn');
+        video.onpause    = () => log('video paused', 'warn');
+        video.onerror    = () => log(`video error: ${video.error?.message}`, 'err');
+
         video.onplaying = () => {
+          log('video playing', 'ok');
           document.getElementById('video-wrap').style.display = 'block';
           document.getElementById('answer-section').style.display = 'none';
         };
@@ -465,6 +602,7 @@
 
     const video = document.getElementById('stream-video');
     const tracks = pc.getReceivers().map(r => r.track).filter(Boolean);
+    log(`recover: reassigning srcObject (${tracks.length} tracks)`, 'warn');
     if (tracks.length) {
       video.srcObject = null;
       video.srcObject = new MediaStream(tracks);
