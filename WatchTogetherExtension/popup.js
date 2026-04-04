@@ -35,6 +35,12 @@ function setError(msg) {
   $('error-msg').classList.toggle('visible', !!msg);
 }
 
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
 // ── Restore state from background on popup open ────────────────────────────
 
 chrome.runtime.sendMessage({ type: 'GET_STATE' }, state => {
@@ -43,37 +49,17 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, state => {
     showScreen('handshake');
   } else if (state?.screen === 'connected') {
     showScreen('connected');
+  } else if (state?.screen === 'viewer-handshake') {
+    $('viewer-answer-out').value = state.answer || '';
+    if (state.syncUrl) showUrlHint(state.syncUrl, state.syncTime);
+    showScreen('viewer-handshake');
+  } else if (state?.screen === 'watching') {
+    showScreen('watching');
   }
   // else: default idle screen is already shown
 });
 
-// ── Preview video ──────────────────────────────────────────────────────────
-
-$('btn-preview').addEventListener('click', () => {
-  const btn = $('btn-preview');
-  btn.disabled = true;
-  btn.textContent = 'Capturing…';
-  $('preview-wrap').style.display = 'none';
-  setError('');
-
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_FRAME' }, resp => {
-      btn.disabled = false;
-      btn.textContent = 'Preview video';
-
-      if (chrome.runtime.lastError) { setError('Could not reach page. Try refreshing.'); return; }
-      if (!resp?.ok)                 { setError(resp?.error || 'No video found.');        return; }
-      if (resp.dataUrl) {
-        $('preview-img').src = resp.dataUrl;
-        $('preview-wrap').style.display = 'block';
-      } else {
-        setError('Video found but frame blocked (cross-origin canvas taint).');
-      }
-    });
-  });
-});
-
-// ── Start sharing ──────────────────────────────────────────────────────────
+// ── Sharer: start sharing ──────────────────────────────────────────────────
 
 $('btn-start').addEventListener('click', () => {
   const btn = $('btn-start');
@@ -83,7 +69,7 @@ $('btn-start').addEventListener('click', () => {
 
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
     chrome.runtime.sendMessage(
-      { type: 'START_SHARE', tabId: tab.id, iceConfig: getIceConfig() },
+      { type: 'START_SHARE', tabId: tab.id, tabUrl: tab.url, iceConfig: getIceConfig() },
       resp => {
         btn.disabled = false;
         btn.textContent = 'Start Sharing';
@@ -98,7 +84,7 @@ $('btn-start').addEventListener('click', () => {
   });
 });
 
-// ── Copy offer code ────────────────────────────────────────────────────────
+// ── Sharer: copy offer code ────────────────────────────────────────────────
 
 $('btn-copy').addEventListener('click', () => {
   navigator.clipboard.writeText($('offer-out').value).then(() => {
@@ -107,7 +93,7 @@ $('btn-copy').addEventListener('click', () => {
   });
 });
 
-// ── Apply answer ───────────────────────────────────────────────────────────
+// ── Sharer: apply answer ───────────────────────────────────────────────────
 
 $('btn-apply').addEventListener('click', () => {
   const answer = $('answer-in').value.trim();
@@ -118,42 +104,102 @@ $('btn-apply').addEventListener('click', () => {
   btn.textContent = 'Connecting…';
   setError('');
 
-  chrome.runtime.sendMessage({ type: 'APPLY_ANSWER', answer }, resp => {
-    btn.disabled = false;
-    btn.textContent = 'Connect';
-
-    if (chrome.runtime.lastError || !resp?.ok) {
-      setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to apply answer.');
-      return;
-    }
-    showScreen('connected');
-  });
-});
-
-// ── Recapture ──────────────────────────────────────────────────────────────
-
-$('btn-recapture').addEventListener('click', () => {
-  const btn = $('btn-recapture');
-  btn.disabled = true;
-  btn.textContent = 'Capturing…';
-  setError('');
-
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.runtime.sendMessage({ type: 'RECAPTURE', tabId: tab.id }, resp => {
+    chrome.runtime.sendMessage({ type: 'APPLY_ANSWER', answer, sharerTabId: tab.id }, resp => {
       btn.disabled = false;
-      btn.textContent = 'Recapture video';
+      btn.textContent = 'Connect';
 
       if (chrome.runtime.lastError || !resp?.ok) {
-        setError(chrome.runtime.lastError?.message || resp?.error || 'Recapture failed.');
+        setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to apply answer.');
+        return;
       }
+      showScreen('connected');
     });
   });
 });
 
-// ── Stop sharing ───────────────────────────────────────────────────────────
+// ── Sharer: stop sharing ───────────────────────────────────────────────────
 
 $('btn-stop').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'STOP_SHARE' }, () => {
-    showScreen('idle');
+  chrome.runtime.sendMessage({ type: 'STOP_SHARE' }, () => showScreen('idle'));
+});
+
+// ── Viewer: open join screen ───────────────────────────────────────────────
+
+$('btn-join').addEventListener('click', () => showScreen('viewer-join'));
+$('btn-back').addEventListener('click', () => showScreen('idle'));
+
+// ── Viewer: show URL hint after pasting offer ──────────────────────────────
+
+function showUrlHint(url, time) {
+  const hint = $('viewer-url-hint');
+  hint.innerHTML = `Navigate to: <strong>${url}</strong><br>Timestamp: <strong>${formatTime(time || 0)}</strong>`;
+  hint.classList.add('visible');
+}
+
+$('viewer-offer-in').addEventListener('input', () => {
+  $('viewer-url-hint').classList.remove('visible');
+});
+
+// ── Viewer: generate answer ────────────────────────────────────────────────
+
+$('btn-gen-answer').addEventListener('click', () => {
+  const offer = $('viewer-offer-in').value.trim();
+  if (!offer) { setError('Paste the offer code first.'); return; }
+
+  const btn = $('btn-gen-answer');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  setError('');
+
+  chrome.runtime.sendMessage({ type: 'JOIN_SESSION', offer }, resp => {
+    btn.disabled = false;
+    btn.textContent = 'Generate Answer';
+
+    if (chrome.runtime.lastError || !resp?.ok) {
+      setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to generate answer.');
+      return;
+    }
+
+    $('viewer-answer-out').value = resp.answer;
+    if (resp.syncUrl) showUrlHint(resp.syncUrl, resp.syncTime);
+    showScreen('viewer-handshake');
   });
+});
+
+// ── Viewer: copy answer code ───────────────────────────────────────────────
+
+$('btn-copy-answer').addEventListener('click', () => {
+  navigator.clipboard.writeText($('viewer-answer-out').value).then(() => {
+    $('btn-copy-answer').textContent = 'Copied!';
+    setTimeout(() => { $('btn-copy-answer').textContent = 'Copy code'; }, 1500);
+  });
+});
+
+// ── Viewer: start watching ────────────────────────────────────────────────
+
+$('btn-start-watching').addEventListener('click', () => {
+  const btn = $('btn-start-watching');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  setError('');
+
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    chrome.runtime.sendMessage({ type: 'START_WATCHING', tabId: tab.id }, resp => {
+      btn.disabled = false;
+      btn.textContent = 'Start Watching';
+
+      if (chrome.runtime.lastError || !resp?.ok) {
+        setError(chrome.runtime.lastError?.message || resp?.error || 'Failed to start watching.');
+        return;
+      }
+      showScreen('watching');
+    });
+  });
+});
+
+// ── Viewer: stop watching ─────────────────────────────────────────────────
+
+$('btn-stop-watch').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'STOP_WATCH' }, () => showScreen('idle'));
 });

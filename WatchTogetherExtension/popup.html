@@ -122,8 +122,19 @@
   .connected-badge .title { font-weight: 600; font-size: 14px; margin: 4px 0 2px; }
   .connected-badge .sub { color: var(--muted); font-size: 12px; }
 
-  .preview-wrap { display: none; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); background: #000; line-height: 0; margin-top: 6px; }
-  .preview-wrap img { width: 100%; display: block; }
+  .url-hint {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+    line-height: 1.5;
+    word-break: break-all;
+    display: none;
+  }
+  .url-hint.visible { display: block; }
+  .url-hint strong { color: var(--text); }
 </style>
 </head>
 <body>
@@ -154,14 +165,11 @@
       <input id="turn-pass" type="password" placeholder="••••••••">
     </div>
   </div>
-  <button id="btn-preview" class="secondary">Preview video</button>
   <button id="btn-start">Start Sharing</button>
-  <div class="preview-wrap" id="preview-wrap">
-    <img id="preview-img" alt="video preview"/>
-  </div>
+  <button id="btn-join" class="secondary">Join Session</button>
 </div>
 
-<!-- ── Screen: handshake ── -->
+<!-- ── Screen: handshake (sharer) ── -->
 <div data-screen="handshake" style="display:none">
   <div>
     <p class="step-label">1 — Send this to your friend</p>
@@ -178,15 +186,51 @@
   </div>
 </div>
 
-<!-- ── Screen: connected ── -->
+<!-- ── Screen: connected (sharer) ── -->
 <div data-screen="connected" style="display:none">
   <div class="connected-badge">
     <div class="dot">●</div>
     <div class="title">Live</div>
     <div class="sub">Your friend is watching</div>
   </div>
-  <button id="btn-recapture" class="secondary">Recapture video</button>
   <button id="btn-stop" class="danger">Stop Sharing</button>
+</div>
+
+<!-- ── Screen: viewer-join ── -->
+<div data-screen="viewer-join" style="display:none">
+  <div>
+    <p class="step-label">Paste offer code</p>
+    <textarea id="viewer-offer-in" rows="4" placeholder="Paste offer code…"></textarea>
+  </div>
+  <div id="viewer-url-hint" class="url-hint"></div>
+  <button id="btn-gen-answer">Generate Answer</button>
+  <button id="btn-back" class="secondary">Back</button>
+</div>
+
+<!-- ── Screen: viewer-handshake ── -->
+<div data-screen="viewer-handshake" style="display:none">
+  <div>
+    <p class="step-label">1 — Send this to the sharer</p>
+    <textarea id="viewer-answer-out" rows="4" readonly></textarea>
+    <button id="btn-copy-answer" class="secondary" style="margin-top:5px">Copy code</button>
+  </div>
+
+  <hr class="divider">
+
+  <div>
+    <p class="step-label">2 — Navigate to the video, then click</p>
+    <button id="btn-start-watching">Start Watching</button>
+  </div>
+</div>
+
+<!-- ── Screen: watching (viewer) ── -->
+<div data-screen="watching" style="display:none">
+  <div class="connected-badge">
+    <div class="dot" style="color:var(--accent)">●</div>
+    <div class="title">Watching</div>
+    <div class="sub">Synced with sharer</div>
+  </div>
+  <button id="btn-stop-watch" class="danger">Stop Watching</button>
 </div>
 
 <div class="error-msg" id="error-msg"></div>

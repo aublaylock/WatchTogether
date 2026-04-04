@@ -51,10 +51,11 @@ function relayOnlySdp(desc) {
   return { ...desc, sdp };
 }
 
-let sharerPc     = null;
-let loopPc       = null;   // background side of the loopback to the capture tab
-let captureTabId = null;   // which tab is currently providing the stream
-let state        = { screen: 'idle', offer: null };
+let sharerPc    = null;
+let dataChannel = null;   // sharer: created channel; viewer: received channel
+let viewerTabId = null;   // viewer side: tab whose video to control
+let syncMode    = null;   // 'sharer' | 'viewer'
+let state       = { screen: 'idle' };
 
 async function waitForGathering(pc, ms) {
   await Promise.race([
@@ -71,50 +72,32 @@ async function waitForGathering(pc, ms) {
   ]);
 }
 
-async function stopCapture(tabId) {
-  if (!tabId) return;
-  await new Promise(res => chrome.tabs.sendMessage(tabId, { type: 'STOP_CAPTURE' }, () => {
-    void chrome.runtime.lastError; // suppress "no receiver" errors
-    res();
-  }));
-}
-
-async function getStreamFromTab(tabId) {
-  if (loopPc) { loopPc.close(); loopPc = null; }
-
-  // Ask content.js to capture video and return a loopback offer
-  const resp = await new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { type: 'GET_STREAM' }, r => {
-      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve(r);
+function getVideoInfoFromTab(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: 'GET_VIDEO_INFO' }, r => {
+      void chrome.runtime.lastError;
+      resolve(r || { currentTime: 0, paused: true });
     });
   });
-  if (!resp?.ok) throw new Error(resp?.error || 'Stream capture failed');
+}
 
-  // Build our side of the loopback
-  loopPc = new RTCPeerConnection({ iceServers: [] });
+function setupViewerChannel() {
+  dataChannel.onmessage = e => {
+    let event;
+    try { event = JSON.parse(e.data); } catch (_) { return; }
+    if (!viewerTabId) return;
+    chrome.tabs.sendMessage(viewerTabId, { type: 'APPLY_SYNC', event }, () => {
+      void chrome.runtime.lastError;
+    });
+  };
+}
 
-  const streamReady = new Promise((resolve, reject) => {
-    const tracks = [];
-    loopPc.ontrack = ev => { tracks.push(ev.track); };
-    loopPc.oniceconnectionstatechange = () => {
-      if (loopPc.iceConnectionState === 'connected')
-        setTimeout(() => resolve(new MediaStream(tracks)), 100);
-      else if (loopPc.iceConnectionState === 'failed')
-        reject(new Error('Loopback ICE failed'));
-    };
-    setTimeout(() => reject(new Error('Loopback connection timeout')), 6000);
-  });
-
-  await loopPc.setRemoteDescription(resp.offer);
-  const answer = await loopPc.createAnswer();
-  await loopPc.setLocalDescription(answer);
-  await waitForGathering(loopPc, 500);
-
-  // Deliver the answer back to content.js so ICE can complete
-  chrome.tabs.sendMessage(tabId, { type: 'STREAM_ANSWER', answer: loopPc.localDescription.toJSON() });
-
-  return streamReady;
+function resetState() {
+  if (dataChannel)  { dataChannel.close();  dataChannel = null; }
+  if (sharerPc)     { sharerPc.close();     sharerPc = null; }
+  viewerTabId = null;
+  syncMode    = null;
+  state       = { screen: 'idle' };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -124,22 +107,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return;
   }
 
+  // ── Sharer: start sharing ──────────────────────────────────────────────────
   if (msg.type === 'START_SHARE') {
     (async () => {
       try {
-        const stream = await getStreamFromTab(msg.tabId);
-        captureTabId = msg.tabId;
+        const videoInfo = await getVideoInfoFromTab(msg.tabId);
 
         sharerPc = new RTCPeerConnection(msg.iceConfig);
-        stream.getTracks().forEach(t => sharerPc.addTrack(t, stream));
+        dataChannel = sharerPc.createDataChannel('sync');
+        syncMode = 'sharer';
 
         await sharerPc.setLocalDescription(await sharerPc.createOffer());
         await waitForGathering(sharerPc, 2000);
 
-        const offer = await compress(JSON.stringify(relayOnlySdp({
-          ...sharerPc.localDescription.toJSON(),
+        const offer = await compress(JSON.stringify({
+          ...relayOnlySdp(sharerPc.localDescription.toJSON()),
           iceServers: msg.iceConfig.iceServers,
-        })));
+          syncUrl:    msg.tabUrl,
+          syncTime:   videoInfo.currentTime,
+          syncPaused: videoInfo.paused,
+        }));
+
         state = { screen: 'handshake', offer };
         sendResponse({ ok: true, offer });
       } catch (err) {
@@ -149,12 +137,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // ── Sharer: apply viewer's answer ─────────────────────────────────────────
   if (msg.type === 'APPLY_ANSWER') {
     if (!sharerPc) { sendResponse({ ok: false, error: 'No active share' }); return; }
     (async () => {
       try {
         const desc = JSON.parse(await decompress(msg.answer));
         await sharerPc.setRemoteDescription(desc);
+
+        // When DataChannel opens, send the current video state as init event
+        dataChannel.onopen = async () => {
+          const info = await getVideoInfoFromTab(msg.sharerTabId);
+          dataChannel.send(JSON.stringify({ type: 'init', currentTime: info.currentTime, paused: info.paused }));
+          // Also start listening for sync events from content.js
+          chrome.tabs.sendMessage(msg.sharerTabId, { type: 'START_SYNC' }, () => { void chrome.runtime.lastError; });
+        };
+
         state.screen = 'connected';
         sendResponse({ ok: true });
       } catch (e) {
@@ -164,22 +162,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'RECAPTURE') {
-    if (!sharerPc) { sendResponse({ ok: false, error: 'No active share' }); return; }
+  // ── Viewer: generate answer from offer ────────────────────────────────────
+  if (msg.type === 'JOIN_SESSION') {
     (async () => {
       try {
-        if (captureTabId && captureTabId !== msg.tabId) {
-          await stopCapture(captureTabId);
-        }
-        const stream = await getStreamFromTab(msg.tabId);
-        captureTabId = msg.tabId;
+        const parsed = JSON.parse(await decompress(msg.offer));
 
-        for (const sender of sharerPc.getSenders()) {
-          if (!sender.track) continue;
-          const newTrack = stream.getTracks().find(t => t.kind === sender.track.kind);
-          if (newTrack) await sender.replaceTrack(newTrack);
-        }
-        sendResponse({ ok: true });
+        sharerPc = new RTCPeerConnection({ iceServers: parsed.iceServers || [] });
+        syncMode = 'viewer';
+
+        sharerPc.ondatachannel = e => {
+          dataChannel = e.channel;
+          setupViewerChannel();
+        };
+
+        await sharerPc.setRemoteDescription({ type: parsed.type, sdp: parsed.sdp });
+        await sharerPc.setLocalDescription(await sharerPc.createAnswer());
+        await waitForGathering(sharerPc, 2000);
+
+        const answer = await compress(JSON.stringify(sharerPc.localDescription.toJSON()));
+
+        state = {
+          screen:     'viewer-handshake',
+          answer,
+          syncUrl:    parsed.syncUrl,
+          syncTime:   parsed.syncTime,
+          syncPaused: parsed.syncPaused,
+        };
+        sendResponse({ ok: true, answer, syncUrl: parsed.syncUrl, syncTime: parsed.syncTime });
       } catch (err) {
         sendResponse({ ok: false, error: err.message });
       }
@@ -187,16 +197,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'STOP_SHARE') {
-    (async () => {
-      await stopCapture(captureTabId);
-      if (loopPc)   { loopPc.close();   loopPc = null; }
-      if (sharerPc) { sharerPc.close(); sharerPc = null; }
-      captureTabId = null;
-      state = { screen: 'idle', offer: null };
-      sendResponse({ ok: true });
-    })();
-    return true;
+  // ── Viewer: designate which tab to control ────────────────────────────────
+  if (msg.type === 'START_WATCHING') {
+    viewerTabId = msg.tabId;
+    state.screen = 'watching';
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // ── Sharer: forward sync event from content.js to DataChannel ─────────────
+  if (msg.type === 'SYNC_EVENT') {
+    if (syncMode === 'sharer' && dataChannel?.readyState === 'open') {
+      dataChannel.send(JSON.stringify(msg.event));
+    }
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // ── Stop (both modes) ─────────────────────────────────────────────────────
+  if (msg.type === 'STOP_SHARE' || msg.type === 'STOP_WATCH') {
+    resetState();
+    sendResponse({ ok: true });
+    return;
   }
 
 });
