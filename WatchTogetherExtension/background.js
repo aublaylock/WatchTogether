@@ -126,8 +126,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         syncMode = 'sharer';
         console.log('[SS sharer] PC + DataChannel created');
 
+        sharerPc.oniceconnectionstatechange = () => console.log('[SS sharer] ICE state:', sharerPc.iceConnectionState);
+
         await sharerPc.setLocalDescription(await sharerPc.createOffer());
         await waitForGathering(sharerPc, 2000);
+
+        const candidateTypes = sharerPc.localDescription.sdp
+          .split('\n').filter(l => l.startsWith('a=candidate:'))
+          .map(l => (l.match(/typ (\w+)/) || [])[1]);
+        console.log('[SS sharer] Gathered candidate types:', candidateTypes);
 
         const offer = await compress(JSON.stringify({
           ...relayOnlySdp(sharerPc.localDescription.toJSON()),
@@ -194,6 +201,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           setupViewerChannel();
         };
         sharerPc.oniceconnectionstatechange = () => console.log('[SS viewer] ICE state:', sharerPc.iceConnectionState);
+
+        sharerPc.onicecandidate = e => {
+          if (!e.candidate) console.log('[SS viewer] ICE gathering complete');
+          else console.log('[SS viewer] gathered candidate type:', (e.candidate.candidate.match(/typ (\w+)/) || [])[1]);
+        };
 
         await sharerPc.setRemoteDescription({ type: parsed.type, sdp: parsed.sdp });
         await sharerPc.setLocalDescription(await sharerPc.createAnswer());
